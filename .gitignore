@@ -1,0 +1,14 @@
+
+# Xcode / SwiftPM
+DerivedData/
+build/
+*.xcuserstate
+*.xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+
+# SwiftPM
+.build/
+.swiftpm/
+
