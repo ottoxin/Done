@@ -7,13 +7,13 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		3FFEB4832EF34E51000ED49A /* todomanager.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = todomanager.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3FFEB4832EF34E51000ED49A /* Done.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Done.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		3FFEB4852EF34E51000ED49A /* todomanager */ = {
+		3FFEB4852EF34E51000ED49A /* Done */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = todomanager;
+			path = Done;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +32,7 @@
 		3FFEB47A2EF34E51000ED49A = {
 			isa = PBXGroup;
 			children = (
-				3FFEB4852EF34E51000ED49A /* todomanager */,
+				3FFEB4852EF34E51000ED49A /* Done */,
 				3FFEB4842EF34E51000ED49A /* Products */,
 			);
 			sourceTree = "<group>";
@@ -40,7 +40,7 @@
 		3FFEB4842EF34E51000ED49A /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				3FFEB4832EF34E51000ED49A /* todomanager.app */,
+				3FFEB4832EF34E51000ED49A /* Done.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		3FFEB4822EF34E51000ED49A /* todomanager */ = {
+		3FFEB4822EF34E51000ED49A /* Done */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 3FFEB48E2EF34E52000ED49A /* Build configuration list for PBXNativeTarget "todomanager" */;
+			buildConfigurationList = 3FFEB48E2EF34E52000ED49A /* Build configuration list for PBXNativeTarget "Done" */;
 			buildPhases = (
 				3FFEB47F2EF34E51000ED49A /* Sources */,
 				3FFEB4802EF34E51000ED49A /* Frameworks */,
@@ -61,13 +61,13 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				3FFEB4852EF34E51000ED49A /* todomanager */,
+				3FFEB4852EF34E51000ED49A /* Done */,
 			);
-			name = todomanager;
+			name = Done;
 			packageProductDependencies = (
 			);
 			productName = todomanager;
-			productReference = 3FFEB4832EF34E51000ED49A /* todomanager.app */;
+			productReference = 3FFEB4832EF34E51000ED49A /* Done.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -85,7 +85,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 3FFEB47E2EF34E51000ED49A /* Build configuration list for PBXProject "todomanager" */;
+			buildConfigurationList = 3FFEB47E2EF34E51000ED49A /* Build configuration list for PBXProject "Done" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -99,7 +99,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				3FFEB4822EF34E51000ED49A /* todomanager */,
+				3FFEB4822EF34E51000ED49A /* Done */,
 			);
 		};
 /* End PBXProject section */
@@ -248,20 +248,33 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = YES;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Done;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = otto.todomanager;
+				PRODUCT_BUNDLE_IDENTIFIER = otto.done;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -278,20 +291,33 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = YES;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Done;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = otto.todomanager;
+				PRODUCT_BUNDLE_IDENTIFIER = otto.done;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -306,7 +332,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		3FFEB47E2EF34E51000ED49A /* Build configuration list for PBXProject "todomanager" */ = {
+		3FFEB47E2EF34E51000ED49A /* Build configuration list for PBXProject "Done" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3FFEB48C2EF34E52000ED49A /* Debug */,
@@ -315,7 +341,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		3FFEB48E2EF34E52000ED49A /* Build configuration list for PBXNativeTarget "todomanager" */ = {
+		3FFEB48E2EF34E52000ED49A /* Build configuration list for PBXNativeTarget "Done" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3FFEB48F2EF34E52000ED49A /* Debug */,
