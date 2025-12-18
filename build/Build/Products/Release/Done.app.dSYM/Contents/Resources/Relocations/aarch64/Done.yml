@@ -1,5 +1,0 @@
----
-triple:          'arm64-apple-darwin'
-binary-path:     '/Users/hao/Development/Done/build/Build/Products/Release/Done.app/Contents/MacOS/Done'
-relocations:     []
-...
