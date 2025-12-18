@@ -20,6 +20,10 @@ The UI stays intentionally minimal. No complex project structures, no heavy plan
 - 🔥 Focus mode tomato timer with “sessions today”
 - 📈 Sidebar momentum heatmap (completed todos by day, last 28 days)
 
+<p align="center">
+  <img src="Figures/interface_2.png" width="900" alt="Done interface screenshot" />
+</p>
+
 ## Tech stack
 - SwiftUI
 - SwiftData (`@Model`, `@Query`)
