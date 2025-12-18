@@ -1,0 +1,280 @@
+{
+  "source": "/Users/hao/Development/Done/Done/ContentView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Deep Work",
+        "location": {
+          "startingColumn": 36,
+          "startingLine": 348
+        }
+      },
+      {
+        "comment": "",
+        "key": "Today",
+        "location": {
+          "startingColumn": 50,
+          "startingLine": 348
+        }
+      },
+      {
+        "comment": "",
+        "key": "End",
+        "location": {
+          "startingColumn": 40,
+          "startingLine": 365
+        }
+      },
+      {
+        "comment": "",
+        "key": "Focus",
+        "location": {
+          "startingColumn": 48,
+          "startingLine": 365
+        }
+      },
+      {
+        "comment": "",
+        "key": "Active",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 392
+        }
+      },
+      {
+        "comment": "",
+        "key": "AI Suggestions",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 551
+        }
+      },
+      {
+        "comment": "",
+        "key": "Looks like a straightforward task.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 637
+        }
+      },
+      {
+        "comment": "",
+        "key": "Suggested Breakdown",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 578
+        }
+      },
+      {
+        "comment": "",
+        "key": "Keep One",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 609
+        }
+      },
+      {
+        "comment": "",
+        "key": "Break Down",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 623
+        }
+      },
+      {
+        "comment": "",
+        "key": "Add to List",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 642
+        }
+      },
+      {
+        "comment": "",
+        "key": "Overview",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 682
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 688
+        }
+      },
+      {
+        "comment": "",
+        "key": "Pending Tasks",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 691
+        }
+      },
+      {
+        "comment": "",
+        "key": "Deep Work Today: %lld",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 695
+        }
+      },
+      {
+        "comment": "",
+        "key": "Momentum",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 723
+        }
+      },
+      {
+        "comment": "",
+        "key": "Top task is your current focus.",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 764
+        }
+      },
+      {
+        "comment": "",
+        "key": "Next",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 757
+        }
+      },
+      {
+        "comment": "",
+        "key": "Involvement",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 895
+        }
+      },
+      {
+        "comment": "",
+        "key": "",
+        "location": {
+          "startingColumn": 31,
+          "startingLine": 989
+        }
+      },
+      {
+        "comment": "",
+        "key": "New Task...",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 1099
+        }
+      },
+      {
+        "comment": "",
+        "key": "FOCUSING",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 1175
+        }
+      },
+      {
+        "comment": "",
+        "key": "READY",
+        "location": {
+          "startingColumn": 55,
+          "startingLine": 1175
+        }
+      },
+      {
+        "comment": "",
+        "key": "Sessions",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 1187
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 1192
+        }
+      },
+      {
+        "comment": "",
+        "key": "CURRENT TASK",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1206
+        }
+      },
+      {
+        "comment": "",
+        "key": "Reset",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 1233
+        }
+      },
+      {
+        "comment": "",
+        "key": "All caught up!",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 1305
+        }
+      },
+      {
+        "comment": "",
+        "key": "Nice work. Take a breath.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 1310
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld%%",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 1413
+        }
+      },
+      {
+        "comment": "",
+        "key": "Finished %lld todos on %@",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1516
+        }
+      },
+      {
+        "comment": "",
+        "key": "Finished %lld todos",
+        "location": {
+          "startingColumn": 49,
+          "startingLine": 1506
+        }
+      },
+      {
+        "comment": "",
+        "key": "All Clear",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 1549
+        }
+      },
+      {
+        "comment": "",
+        "key": "Add a task to start analyzing difficulty.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 1554
+        }
+      }
+    ]
+  },
+  "version": 1
+}

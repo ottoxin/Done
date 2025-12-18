@@ -1624,10 +1624,10 @@ private struct SeededPreviewHost: View {
         }
 
         // Active tasks
-        let active: [(String, Int, Bool)] = [
-            ("Write proposal", 4, true),
-            ("Refactor UI Code", 3, true),
-            ("Buy groceries", 2, false)
+        let active: [(String, Int)] = [
+            ("Write proposal", 4),
+            ("Refactor UI Code", 3),
+            ("Buy groceries", 2)
         ]
 
         for (idx, a) in active.enumerated() {
@@ -1635,7 +1635,6 @@ private struct SeededPreviewHost: View {
                 title: a.0,
                 difficultyScore: a.1,
                 priority: 1,
-                isComplex: a.2,
                 sortOrder: idx
             )
             modelContext.insert(item)
@@ -1679,4 +1678,3 @@ private struct SeededPreviewHost: View {
     SeededPreviewHost()
         .modelContainer(for: TodoItem.self, inMemory: true)
 }
-
