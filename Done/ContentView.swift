@@ -16,8 +16,13 @@ final class TodoItem {
     var priority: Int
     var isComplex: Bool
 
-    // NEW: manual order for active tasks (0 = top)
+    // Manual order for active tasks (0 = top)
     var sortOrder: Int?
+    // AI-estimated time in minutes (nil = use difficulty fallback)
+    var estimatedMinutes: Int?
+    // Persisted schedule block for today
+    var scheduledStart: Date?
+    var scheduledEnd: Date?
 
     init(
         title: String,
@@ -64,11 +69,13 @@ struct TaskAnalysis: Decodable {
     let difficulty: Int
     let isComplex: Bool
     let subtasks: [String]
+    let estimatedMinutes: Int  // AI-provided time estimate
 
-    init(difficulty: Int, isComplex: Bool, subtasks: [String]) {
+    init(difficulty: Int, isComplex: Bool, subtasks: [String], estimatedMinutes: Int) {
         self.difficulty = difficulty
         self.isComplex = isComplex
         self.subtasks = subtasks
+        self.estimatedMinutes = estimatedMinutes
     }
 
     init(from decoder: Decoder) throws {
@@ -76,11 +83,14 @@ struct TaskAnalysis: Decodable {
         let difficulty = (try? c.decode(Int.self, forKey: .difficulty)) ?? 1
         let isComplex = (try? c.decode(Bool.self, forKey: .isComplex)) ?? false
         let subtasks = (try? c.decode([String].self, forKey: .subtasks)) ?? []
-        self.init(difficulty: difficulty, isComplex: isComplex, subtasks: subtasks)
+        // Fall back to difficulty-based estimate if AI doesn't provide one
+        let fallback = [1: 15, 2: 25, 3: 45, 4: 60, 5: 90][difficulty] ?? 30
+        let estimatedMinutes = (try? c.decode(Int.self, forKey: .estimatedMinutes)) ?? fallback
+        self.init(difficulty: difficulty, isComplex: isComplex, subtasks: subtasks, estimatedMinutes: estimatedMinutes)
     }
 
     enum CodingKeys: String, CodingKey {
-        case difficulty, isComplex, subtasks
+        case difficulty, isComplex, subtasks, estimatedMinutes
     }
 }
 
@@ -183,6 +193,8 @@ enum DeepWorkStore {
 
 @main
 struct SmartTodosApp: App {
+    @StateObject private var menuBarState = MenuBarState.shared
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([TodoItem.self])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
@@ -199,6 +211,48 @@ struct SmartTodosApp: App {
         #if os(macOS)
             .windowStyle(.hiddenTitleBar)
         #endif
+
+        #if os(macOS)
+        MenuBarExtra {
+            MenuBarTaskView()
+                .modelContainer(sharedModelContainer)
+        } label: {
+            MenuBarLabel(state: menuBarState)
+        }
+        .menuBarExtraStyle(.window)
+
+        Settings { SettingsView() }
+        #endif
+    }
+}
+
+// The bar shown in the system menu bar — shows current task name + time inline
+struct MenuBarLabel: View {
+    @ObservedObject var state: MenuBarState
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: state.activeCount == 0 ? "checkmark.circle.fill" : "circle.dotted.circle")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(state.activeCount == 0 ? .green : .primary)
+
+            if let title = state.currentTaskTitle {
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                    .frame(maxWidth: 160, alignment: .leading)
+
+                if let mins = state.currentTaskMinutes {
+                    Text("· \(mins)m")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Done")
+                    .font(.system(size: 12, weight: .medium))
+            }
+        }
+        .fixedSize()
     }
 }
 
@@ -220,6 +274,9 @@ struct ContentView: View {
     // Deep work count for today
     @State private var deepWorkToday = DeepWorkStore.countToday()
     @State private var draggingTask: TodoItem?
+
+    @ObservedObject private var calendar = CalendarService.shared
+    @ObservedObject private var sharedState = SharedStateService.shared
 
     private func nextActiveSortOrder() -> Int {
         let active = items.filter { !$0.isCompleted }
@@ -290,7 +347,8 @@ struct ContentView: View {
             SidebarView(
                 activeCount: activeTasks.count,
                 allItems: displayItems,
-                deepWorkCountToday: deepWorkToday
+                deepWorkCountToday: deepWorkToday,
+                calendar: calendar
             )
             .background(Color.white)
         } detail: {
@@ -339,6 +397,32 @@ struct ContentView: View {
         .onAppear {
             deepWorkToday = DeepWorkStore.countToday()
             normalizeActiveSortOrdersIfNeeded()
+        }
+        .task {
+            await CalendarService.shared.requestAccessIfNeeded()
+            CalendarService.shared.scheduleTasks(activeTasks)
+            persistScheduledBlocks()
+            MenuBarState.shared.update(tasks: items)
+            SharedStateService.shared.exportState(tasks: items, freeMinutes: calendar.totalFreeMinutesToday)
+            SharedStateService.shared.startWatching()
+        }
+        .onChange(of: activeTasks.count) { _, _ in
+            CalendarService.shared.scheduleTasks(activeTasks)
+            persistScheduledBlocks()
+            MenuBarState.shared.update(tasks: items)
+            SharedStateService.shared.exportState(tasks: items, freeMinutes: calendar.totalFreeMinutesToday)
+        }
+        .onChange(of: sharedState.pendingUpdates) { _, updates in
+            guard let updates else { return }
+            sharedState.applyUpdates(updates, tasks: items, context: modelContext)
+        }
+        .alert("Plan updated", isPresented: .init(
+            get: { sharedState.lastAppliedMessage != nil },
+            set: { if !$0 { sharedState.lastAppliedMessage = nil } }
+        )) {
+            Button("OK") { sharedState.lastAppliedMessage = nil }
+        } message: {
+            Text(sharedState.lastAppliedMessage ?? "")
         }
     }
 
@@ -457,7 +541,7 @@ struct ContentView: View {
         isAnalyzing = true
 
         Task {
-            let analysis = await OllamaService().analyzeTask(title: pendingTaskTitle)
+            let analysis = await makeLLMService().analyzeTask(title: pendingTaskTitle)
 
             await MainActor.run {
                 if let a = analysis {
@@ -472,7 +556,8 @@ struct ContentView: View {
                     self.pendingAnalysis = TaskAnalysis(
                         difficulty: clamped,
                         isComplex: a.isComplex,
-                        subtasks: Array(cleanedSubs)
+                        subtasks: Array(cleanedSubs),
+                        estimatedMinutes: a.estimatedMinutes
                     )
                 } else {
                     self.pendingAnalysis = nil
@@ -492,12 +577,27 @@ struct ContentView: View {
             isComplex: pendingAnalysis?.isComplex ?? false,
             sortOrder: nextActiveSortOrder()
         )
+        newItem.estimatedMinutes = pendingAnalysis?.estimatedMinutes
         modelContext.insert(newItem)
         showApprovalSheet = false
     }
 
+    private func persistScheduledBlocks() {
+        let blocks = CalendarService.shared.scheduledBlocks
+        let scheduled = Dictionary(uniqueKeysWithValues: blocks.map { ($0.taskID, $0) })
+        for item in activeTasks {
+            let block = scheduled[item.id]
+            item.scheduledStart = block?.start
+            item.scheduledEnd   = block?.end
+        }
+        try? modelContext.save()
+    }
+
     private func addSplitTasks() {
         if let analysis = pendingAnalysis, !analysis.subtasks.isEmpty {
+            let subMinutes = analysis.estimatedMinutes > 0
+                ? max(10, analysis.estimatedMinutes / analysis.subtasks.count)
+                : nil
             for sub in analysis.subtasks {
                 let subDifficulty = max(1, analysis.difficulty - 1)
                 let newItem = TodoItem(
@@ -505,6 +605,7 @@ struct ContentView: View {
                     difficultyScore: subDifficulty,
                     sortOrder: nextActiveSortOrder()
                 )
+                newItem.estimatedMinutes = subMinutes
                 modelContext.insert(newItem)
             }
         } else {
@@ -565,6 +666,10 @@ struct TaskApprovalView: View {
 
                     if analysis?.isComplex == true {
                         Badge(text: "Complex", color: .purple)
+                    }
+
+                    if let mins = analysis?.estimatedMinutes, mins > 0 {
+                        Badge(text: "~\(mins)m", color: .gray)
                     }
                 }
             }
@@ -662,6 +767,7 @@ struct SidebarView: View {
     let activeCount: Int
     let allItems: [TodoItem]
     let deepWorkCountToday: Int
+    @ObservedObject var calendar: CalendarService
 
     private var completionRate: Double {
         let total = Double(allItems.count)
@@ -699,7 +805,6 @@ struct SidebarView: View {
 
                         Spacer()
 
-                        // Bigger ring
                         CircularProgressView(progress: completionRate)
                             .frame(width: 92, height: 92)
                     }
@@ -710,6 +815,9 @@ struct SidebarView: View {
                         .fill(Color.gray.opacity(0.05))
                         .shadow(color: .black.opacity(0.05), radius: 10, x: 0, y: 5)
                 )
+
+                // Calendar / Free time card
+                CalendarCard(calendar: calendar)
 
                 // Queue / Celebration
                 if pending.isEmpty {
@@ -736,14 +844,130 @@ struct SidebarView: View {
             .padding()
         }
     }
+}
 
-    
-    private func difficultyColor(_ score: Int) -> Color {
-        switch score {
-        case 4...5: return .red
-        case 3: return .orange
-        default: return .blue
+// MARK: - Calendar Card (sidebar)
+
+struct CalendarCard: View {
+    @ObservedObject var calendar: CalendarService
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Today's Schedule", systemImage: "calendar")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if calendar.isAuthorized {
+                    Button {
+                        Task { await calendar.refreshToday() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
+            if !calendar.isAuthorized {
+                // Not authorized yet
+                VStack(spacing: 8) {
+                    Text("Grant calendar access to see free time blocks.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    Button("Allow Calendar Access") {
+                        Task { await calendar.requestAccessIfNeeded() }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+                }
+                .frame(maxWidth: .infinity)
+            } else if calendar.todayFreeSlots.isEmpty && calendar.busyEvents.isEmpty {
+                Text("No events today — your day is wide open.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                // Free time summary
+                if calendar.totalFreeMinutesToday > 0 {
+                    HStack(spacing: 6) {
+                        Image(systemName: "clock.fill")
+                            .foregroundStyle(.green)
+                            .font(.caption)
+                        Text("\(calendar.totalFreeMinutesToday) min free today")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.green)
+                    }
+                }
+
+                // Scheduled task blocks
+                if !calendar.scheduledBlocks.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("SUGGESTED BLOCKS")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .tracking(1)
+
+                        ForEach(calendar.scheduledBlocks.prefix(5)) { block in
+                            HStack(spacing: 8) {
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(Color.blue.opacity(0.7))
+                                    .frame(width: 3, height: 28)
+
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(block.taskTitle)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .lineLimit(1)
+                                    Text(block.formattedTime)
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text("\(block.durationMinutes)m")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                }
+
+                // Busy events
+                if !calendar.busyEvents.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("BUSY")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .tracking(1)
+
+                        ForEach(Array(calendar.busyEvents.prefix(3))) { event in
+                            HStack(spacing: 8) {
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(Color.orange.opacity(0.7))
+                                    .frame(width: 3, height: 20)
+
+                                Text(event.title)
+                                    .font(.system(size: 11))
+                                    .lineLimit(1)
+
+                                Spacer()
+
+                                Text(event.start, style: .time)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
         }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color.gray.opacity(0.05))
+        )
     }
 }
 
@@ -1021,6 +1245,18 @@ struct TaskRowView: View {
                         .buttonStyle(.plain)
                         if item.isComplex {
                             Badge(text: "Complex", color: .purple)
+                        }
+                        if let start = item.scheduledStart, let end = item.scheduledEnd {
+                            HStack(spacing: 3) {
+                                Image(systemName: "clock")
+                                    .font(.system(size: 9, weight: .medium))
+                                Text("\(start, style: .time) – \(end, style: .time)")
+                                    .font(.system(size: 10, weight: .medium))
+                            }
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(Color.gray.opacity(0.08)))
                         }
                     }
                 }

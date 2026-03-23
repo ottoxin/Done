@@ -12,3 +12,4 @@ build/
 .build/
 .swiftpm/
 
+.DS_Store
