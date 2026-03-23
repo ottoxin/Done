@@ -212,6 +212,7 @@ struct SmartTodosApp: App {
     var body: some Scene {
         WindowGroup { ContentView() }
             .modelContainer(sharedModelContainer)
+            .defaultSize(width: 960, height: 680)
         #if os(macOS)
             .windowStyle(.hiddenTitleBar)
         #endif
@@ -401,10 +402,10 @@ struct ContentView: View {
                 deepWorkCountToday: deepWorkToday,
                 calendar: calendar
             )
-            .background(Color.white)
+            .navigationSplitViewColumnWidth(min: 220, ideal: 260)
         } detail: {
             ZStack(alignment: .bottom) {
-                Color.white.ignoresSafeArea()
+                Color(NSColor.windowBackgroundColor).ignoresSafeArea()
 
                 VStack(spacing: 0) {
                     header
@@ -447,6 +448,15 @@ struct ContentView: View {
         }
         .onAppear {
             deepWorkToday = DeepWorkStore.countToday()
+            // One-time migration: isToday was added after initial release.
+            // SwiftData defaults new Bool columns to false — flip all existing tasks back to today.
+            if !UserDefaults.standard.bool(forKey: "todayFieldMigrated") {
+                for item in items where !item.isCompleted {
+                    item.isToday = true
+                }
+                try? modelContext.save()
+                UserDefaults.standard.set(true, forKey: "todayFieldMigrated")
+            }
             normalizeActiveSortOrdersIfNeeded()
         }
         .task {
@@ -458,6 +468,12 @@ struct ContentView: View {
             SharedStateService.shared.startWatching()
         }
         .onChange(of: activeTasks.count) { _, _ in
+            CalendarService.shared.scheduleTasks(activeTasks)
+            persistScheduledBlocks()
+            MenuBarState.shared.update(tasks: items)
+            SharedStateService.shared.exportState(tasks: items, freeMinutes: calendar.totalFreeMinutesToday)
+        }
+        .onChange(of: activeTasks.map { CalendarService.shared.estimatedMinutes(for: $0) }.reduce(0, +)) { _, _ in
             CalendarService.shared.scheduleTasks(activeTasks)
             persistScheduledBlocks()
             MenuBarState.shared.update(tasks: items)
@@ -1378,7 +1394,7 @@ struct TaskRowView: View {
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 20)
-                .fill(Color.white)
+                .fill(Color(NSColor.controlBackgroundColor))
                 .shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 4)
         )
     }
@@ -1460,7 +1476,7 @@ struct InputBarView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
-        .background(Color.white)
+        .background(Color(NSColor.windowBackgroundColor))
         .overlay(Rectangle().frame(height: 1).foregroundColor(Color.gray.opacity(0.1)), alignment: .top)
         .padding(.horizontal, 0)
     }
@@ -1603,7 +1619,7 @@ struct FocusModeView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .padding(.horizontal, 28)
         }
-        .background(Color.white)
+        .background(Color(NSColor.windowBackgroundColor))
         .onReceive(timer) { _ in
             guard isRunning else { return }
 

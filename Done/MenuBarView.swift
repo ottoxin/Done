@@ -9,7 +9,7 @@ struct MenuBarTaskView: View {
 
     private var activeTasks: [TodoItem] {
         allItems
-            .filter { !$0.isCompleted }
+            .filter { !$0.isCompleted && $0.isToday }
             .sorted { ($0.sortOrder ?? Int.max) < ($1.sortOrder ?? Int.max) }
     }
 
