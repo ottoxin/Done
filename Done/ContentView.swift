@@ -24,7 +24,7 @@ final class TodoItem {
     var scheduledStart: Date?
     var scheduledEnd: Date?
     // Whether this task is planned for today vs sitting in the waitlist
-    var isToday: Bool
+    var isToday: Bool = true
 
     init(
         title: String,
@@ -201,11 +201,19 @@ struct SmartTodosApp: App {
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([TodoItem.self])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        if let container = try? ModelContainer(for: schema, configurations: [config]) {
+            return container
+        }
+        // Migration failed (schema changed) — wipe the store and start fresh
+        let base = config.url.path
+        for path in [base, base + "-wal", base + "-shm"] {
+            try? FileManager.default.removeItem(atPath: path)
+        }
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            return try ModelContainer(for: schema, configurations: [config])
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            fatalError("Could not create ModelContainer after store reset: \(error)")
         }
     }()
 
