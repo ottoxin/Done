@@ -224,13 +224,34 @@ final class CalendarService: ObservableObject {
 
     func estimatedMinutes(for task: TodoItem) -> Int {
         if let ai = task.estimatedMinutes, ai > 0 { return ai }
-        switch task.difficultyScore {
-        case 1: return 15
-        case 2: return 25
-        case 3: return 45
-        case 4: return 60
+        return heuristicMinutes(title: task.title, difficulty: task.difficultyScore)
+    }
+
+    /// Keyword-based estimate used when the AI hasn't analysed the task yet.
+    private func heuristicMinutes(title: String, difficulty: Int) -> Int {
+        let lower = title.lowercased()
+        let heavy  = ["write", "draft", "design", "build", "implement", "develop", "create",
+                      "refactor", "research", "plan", "prepare", "architect", "analyze", "document"]
+        let medium = ["review", "update", "fix", "edit", "check", "test", "read",
+                      "call", "meet", "debug", "interview", "discuss"]
+        let quick  = ["reply", "email", "message", "buy", "schedule", "book",
+                      "confirm", "approve", "ping", "send", "submit", "share"]
+
+        let isHeavy  = heavy.contains  { lower.contains($0) }
+        let isMedium = !isHeavy  && medium.contains { lower.contains($0) }
+        let isQuick  = !isHeavy  && !isMedium && quick.contains { lower.contains($0) }
+
+        switch difficulty {
         case 5: return 90
-        default: return 30
+        case 4: return isHeavy ? 75 : 60
+        case 3: return isHeavy ? 60 : isMedium ? 45 : 35
+        case 2: return isHeavy ? 40 : isMedium ? 25 : isQuick ? 15 : 20
+        case 1: return isQuick ?  8 : isMedium ? 18 : 12
+        default:
+            if isHeavy  { return 40 }
+            if isMedium { return 25 }
+            if isQuick  { return 10 }
+            return 20
         }
     }
 }

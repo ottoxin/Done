@@ -15,6 +15,15 @@ final class MenuBarState: ObservableObject {
     @Published var blockProgress: Double? = nil
     @Published var blockMinutesLeft: Int? = nil
 
+    // Focus (Pomodoro) state — driven by FocusModeView
+    @Published var isFocusMode: Bool = false
+    @Published var focusTimeLeft: Int = 25 * 60   // seconds remaining
+    @Published var focusIsRunning: Bool = false
+
+    var focusProgress: Double {
+        max(0, min(1, 1.0 - Double(focusTimeLeft) / Double(25 * 60)))
+    }
+
     private var blockStart: Date? = nil
     private var blockEnd: Date? = nil
     private var ticker: AnyCancellable? = nil

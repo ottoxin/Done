@@ -252,31 +252,71 @@ struct MenuBarLabel: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            // Icon
-            Image(systemName: state.activeCount == 0 ? "checkmark.circle.fill" : hourglassIcon)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(state.activeCount == 0 ? .green : .primary)
-
-            if let title = state.currentTaskTitle {
-                Text(title)
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
-                    .frame(maxWidth: 150, alignment: .leading)
-
-                // Charge bar — only when a block is active
-                if let progress = state.blockProgress {
-                    ChargeBar(progress: progress, minutesLeft: state.blockMinutesLeft)
-                } else if let mins = state.currentTaskMinutes {
-                    Text("· \(mins)m")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
+            if state.isFocusMode {
+                // Radial tick dial replaces everything during a Pomodoro session
+                RadialTickView(progress: state.focusProgress, isRunning: state.focusIsRunning)
+                    .frame(width: 20, height: 20)
             } else {
-                Text("Done")
-                    .font(.system(size: 12, weight: .medium))
+                // Normal: hourglass + task name + charge bar
+                Image(systemName: state.activeCount == 0 ? "checkmark.circle.fill" : hourglassIcon)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(state.activeCount == 0 ? .green : .primary)
+
+                if let title = state.currentTaskTitle {
+                    Text(title)
+                        .font(.system(size: 12, weight: .medium))
+                        .lineLimit(1)
+                        .frame(maxWidth: 150, alignment: .leading)
+
+                    if let progress = state.blockProgress {
+                        ChargeBar(progress: progress, minutesLeft: state.blockMinutesLeft)
+                    } else if let mins = state.currentTaskMinutes {
+                        Text("· \(mins)m")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("Done")
+                        .font(.system(size: 12, weight: .medium))
+                }
             }
         }
         .fixedSize()
+    }
+}
+
+/// Circular tick-mark dial shown in the menu bar during a Pomodoro session.
+/// Filled ticks = elapsed; faint ticks = remaining.
+struct RadialTickView: View {
+    let progress: Double   // 0.0 → 1.0
+    let isRunning: Bool
+    private let tickCount = 36  // one tick every 10°
+
+    var body: some View {
+        Canvas { context, size in
+            let cx: Double = size.width / 2
+            let cy: Double = size.height / 2
+            let outerR: Double = min(cx, cy) - 0.5
+            let innerR: Double = outerR * 0.60
+            let clamped: Double = min(max(progress, 0), 1)
+            let filled: Int = Int((Double(tickCount) * clamped).rounded())
+
+            for i in 0..<tickCount {
+                let fraction: Double = Double(i) / Double(tickCount)
+                let angle: Double = fraction * 2 * Double.pi - Double.pi / 2
+                let cosA: Double = cos(angle)
+                let sinA: Double = sin(angle)
+                let outer = CGPoint(x: cx + outerR * cosA, y: cy + outerR * sinA)
+                let inner = CGPoint(x: cx + innerR * cosA, y: cy + innerR * sinA)
+                var path = Path()
+                path.move(to: inner)
+                path.addLine(to: outer)
+                let isFilled: Bool = i < filled
+                let opacity: Double = isFilled ? 0.90 : 0.18
+                let lineWidth: Double = isFilled ? (isRunning ? 2.2 : 1.8) : 1.0
+                context.stroke(path, with: .color(Color.primary.opacity(opacity)), lineWidth: lineWidth)
+            }
+        }
     }
 }
 
@@ -1602,6 +1642,8 @@ struct FocusModeView: View {
                             isRunning = false
                             timeLeft = 25 * 60
                             didFinishThisRun = false
+                            MenuBarState.shared.focusTimeLeft = 25 * 60
+                            MenuBarState.shared.focusIsRunning = false
                         }
                     }) {
                         VStack(spacing: 8) {
@@ -1618,11 +1660,9 @@ struct FocusModeView: View {
 
                     Button(action: {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                            if !isRunning {
-                                // starting a new run
-                                didFinishThisRun = false
-                            }
+                            if !isRunning { didFinishThisRun = false }
                             isRunning.toggle()
+                            MenuBarState.shared.focusIsRunning = isRunning
                         }
                     }) {
                         Image(systemName: isRunning ? "pause.fill" : "play.fill")
@@ -1644,17 +1684,29 @@ struct FocusModeView: View {
             .padding(.horizontal, 28)
         }
         .background(Color(NSColor.windowBackgroundColor))
+        .onAppear {
+            MenuBarState.shared.isFocusMode = true
+            MenuBarState.shared.focusTimeLeft = timeLeft
+            MenuBarState.shared.focusIsRunning = isRunning
+        }
+        .onDisappear {
+            MenuBarState.shared.isFocusMode = false
+            MenuBarState.shared.focusIsRunning = false
+        }
         .onReceive(timer) { _ in
             guard isRunning else { return }
 
             if timeLeft > 0 {
                 timeLeft -= 1
             }
+            MenuBarState.shared.focusTimeLeft = timeLeft
+            MenuBarState.shared.focusIsRunning = isRunning
 
             // Session just finished
             if timeLeft == 0, !didFinishThisRun {
                 didFinishThisRun = true
                 isRunning = false
+                MenuBarState.shared.focusIsRunning = false
                 onFinishSession()
             }
         }
