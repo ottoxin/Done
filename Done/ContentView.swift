@@ -244,7 +244,7 @@ struct MenuBarLabel: View {
     @ObservedObject var state: MenuBarState
 
     private var hourglassIcon: String {
-        guard let p = state.blockProgress else { return "circle.dotted.circle" }
+        guard let p = state.blockProgress else { return "checklist" }
         if p < 0.33 { return "hourglass.tophalf.filled" }
         if p < 0.66 { return "hourglass"               }
         return "hourglass.bottomhalf.filled"

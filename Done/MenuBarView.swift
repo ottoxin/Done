@@ -38,6 +38,17 @@ struct MenuBarTaskView: View {
         }
         .frame(width: 320)
         .background(Color(NSColor.windowBackgroundColor))
+        .task {
+            // Drive scheduling from the menu bar independently so the charge bar
+            // works even when the main window has never been opened.
+            await CalendarService.shared.requestAccessIfNeeded()
+            CalendarService.shared.scheduleTasks(activeTasks)
+            MenuBarState.shared.update(tasks: allItems)
+        }
+        .onChange(of: activeTasks.count) { _, _ in
+            CalendarService.shared.scheduleTasks(activeTasks)
+            MenuBarState.shared.update(tasks: allItems)
+        }
     }
 
     // MARK: Now card

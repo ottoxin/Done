@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SwiftData
 
 /// Shared state that lets ContentView push live task info into the menu bar label.
 final class MenuBarState: ObservableObject {
@@ -40,9 +41,15 @@ final class MenuBarState: ObservableObject {
         currentTaskTitle   = top?.title
         currentTaskMinutes = top.map { CalendarService.shared.estimatedMinutes(for: $0) }
 
-        // Pick up scheduled block for the top task
-        blockStart = top?.scheduledStart
-        blockEnd   = top?.scheduledEnd
+        // Prefer the live CalendarService block (available as soon as scheduling runs);
+        // fall back to the persisted value for when the app relaunches before a reschedule.
+        if let top, let liveBlock = CalendarService.shared.block(for: top.id) {
+            blockStart = liveBlock.start
+            blockEnd   = liveBlock.end
+        } else {
+            blockStart = top?.scheduledStart
+            blockEnd   = top?.scheduledEnd
+        }
         refreshProgress()
     }
 
