@@ -986,18 +986,34 @@ struct CalendarCard: View {
             }
 
             if !calendar.isAuthorized {
-                // Not authorized yet
                 VStack(spacing: 8) {
-                    Text("Grant calendar access to see free time blocks.")
+                    if calendar.isDenied {
+                        // Already denied — macOS won't show the dialog again
+                        Text("Calendar access was denied. Enable it in System Settings to see your schedule.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        Button("Open System Settings") {
+                            NSWorkspace.shared.open(
+                                URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Calendars")!
+                            )
+                        }
+                        .buttonStyle(.plain)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                    Button("Allow Calendar Access") {
-                        Task { await calendar.requestAccessIfNeeded() }
+                        .foregroundStyle(.blue)
+                    } else {
+                        // Not asked yet
+                        Text("Grant calendar access to see free time blocks.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        Button("Allow Calendar Access") {
+                            Task { await calendar.requestAccessIfNeeded() }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                        .foregroundStyle(.blue)
                     }
-                    .buttonStyle(.plain)
-                    .font(.caption)
-                    .foregroundStyle(.blue)
                 }
                 .frame(maxWidth: .infinity)
             } else if calendar.todayFreeSlots.isEmpty && calendar.busyEvents.isEmpty {

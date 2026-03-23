@@ -63,10 +63,14 @@ final class CalendarService: ObservableObject {
 
     var isAuthorized: Bool {
         if #available(macOS 14.0, *) {
-            return authorizationStatus == .fullAccess
+            return authorizationStatus == .fullAccess || authorizationStatus == .authorized
         } else {
             return authorizationStatus == .authorized
         }
+    }
+
+    var isDenied: Bool {
+        authorizationStatus == .denied || authorizationStatus == .restricted
     }
 
     var totalFreeMinutesToday: Int {
