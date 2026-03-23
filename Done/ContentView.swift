@@ -23,13 +23,16 @@ final class TodoItem {
     // Persisted schedule block for today
     var scheduledStart: Date?
     var scheduledEnd: Date?
+    // Whether this task is planned for today vs sitting in the waitlist
+    var isToday: Bool
 
     init(
         title: String,
         difficultyScore: Int = 1,
         priority: Int = 1,
         isComplex: Bool = false,
-        sortOrder: Int? = nil
+        sortOrder: Int? = nil,
+        isToday: Bool = true
     ) {
         self.title = title
         self.isCompleted = false
@@ -38,6 +41,7 @@ final class TodoItem {
         self.priority = priority
         self.isComplex = isComplex
         self.sortOrder = sortOrder
+        self.isToday = isToday
     }
 }
 
@@ -226,13 +230,21 @@ struct SmartTodosApp: App {
     }
 }
 
-// The bar shown in the system menu bar — shows current task name + time inline
+// The bar shown in the system menu bar — task name + live charge bar
 struct MenuBarLabel: View {
     @ObservedObject var state: MenuBarState
 
+    private var hourglassIcon: String {
+        guard let p = state.blockProgress else { return "circle.dotted.circle" }
+        if p < 0.33 { return "hourglass.tophalf.filled" }
+        if p < 0.66 { return "hourglass"               }
+        return "hourglass.bottomhalf.filled"
+    }
+
     var body: some View {
-        HStack(spacing: 5) {
-            Image(systemName: state.activeCount == 0 ? "checkmark.circle.fill" : "circle.dotted.circle")
+        HStack(spacing: 6) {
+            // Icon
+            Image(systemName: state.activeCount == 0 ? "checkmark.circle.fill" : hourglassIcon)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(state.activeCount == 0 ? .green : .primary)
 
@@ -240,9 +252,12 @@ struct MenuBarLabel: View {
                 Text(title)
                     .font(.system(size: 12, weight: .medium))
                     .lineLimit(1)
-                    .frame(maxWidth: 160, alignment: .leading)
+                    .frame(maxWidth: 150, alignment: .leading)
 
-                if let mins = state.currentTaskMinutes {
+                // Charge bar — only when a block is active
+                if let progress = state.blockProgress {
+                    ChargeBar(progress: progress, minutesLeft: state.blockMinutesLeft)
+                } else if let mins = state.currentTaskMinutes {
                     Text("· \(mins)m")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
@@ -253,6 +268,39 @@ struct MenuBarLabel: View {
             }
         }
         .fixedSize()
+    }
+}
+
+struct ChargeBar: View {
+    let progress: Double          // 0.0 – 1.0
+    let minutesLeft: Int?
+
+    private var barColor: Color {
+        if progress > 0.85 { return .red    }
+        if progress > 0.60 { return .orange }
+        return .blue
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            // Capsule track + fill
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.secondary.opacity(0.2))
+                    .frame(width: 32, height: 5)
+                Capsule()
+                    .fill(barColor)
+                    .frame(width: max(4, 32 * progress), height: 5)
+                    .animation(.linear(duration: 0.4), value: progress)
+            }
+
+            if let left = minutesLeft, left > 0 {
+                Text("\(left)m")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+        }
     }
 }
 
@@ -279,20 +327,22 @@ struct ContentView: View {
     @ObservedObject private var sharedState = SharedStateService.shared
 
     private func nextActiveSortOrder() -> Int {
-        let active = items.filter { !$0.isCompleted }
-        return (active.compactMap { $0.sortOrder }.max() ?? -1) + 1
+        // Only consider Today tasks so Someday tasks don't pollute the order space
+        let today = items.filter { !$0.isCompleted && $0.isToday }
+        return (today.compactMap { $0.sortOrder }.max() ?? -1) + 1
     }
 
     private func normalizeActiveSortOrdersIfNeeded() {
-        let active = items.filter { !$0.isCompleted }
-        guard !active.isEmpty else { return }
+        // Only normalize Today tasks — Someday tasks don't need a stable sortOrder
+        let today = items.filter { !$0.isCompleted && $0.isToday }
+        guard !today.isEmpty else { return }
 
-        let hasNil = active.contains(where: { $0.sortOrder == nil })
-        let unique = Set(active.compactMap { $0.sortOrder })
-        let hasDuplicates = unique.count != active.compactMap { $0.sortOrder }.count
+        let hasNil = today.contains(where: { $0.sortOrder == nil })
+        let unique = Set(today.compactMap { $0.sortOrder })
+        let hasDuplicates = unique.count != today.compactMap { $0.sortOrder }.count
 
         if hasNil || hasDuplicates {
-            let sorted = active.sorted { $0.createdAt < $1.createdAt }
+            let sorted = today.sorted { $0.createdAt < $1.createdAt }
             for (i, t) in sorted.enumerated() { t.sortOrder = i }
             try? modelContext.save()
         }
@@ -331,7 +381,8 @@ struct ContentView: View {
         }
     }
 
-    private var activeTasks: [TodoItem] { displayItems.filter { !$0.isCompleted } }
+    private var activeTasks: [TodoItem] { displayItems.filter { !$0.isCompleted && $0.isToday } }
+    private var waitlistTasks: [TodoItem] { displayItems.filter { !$0.isCompleted && !$0.isToday } }
 
     private var completedTasksByDate: [(Date, [TodoItem])] {
         let completed = items.filter { $0.isCompleted }
@@ -449,12 +500,8 @@ struct ContentView: View {
                     Text(isFocusMode ? "End" : "Focus")
                         .fontWeight(.semibold)
                 }
-                // Same size for Focus/End
                 .frame(width: 118, height: 36)
-                .background(
-                    Capsule()
-                        .fill(isFocusMode ? Color.gray.opacity(0.1) : Color.blue)
-                )
+                .background(Capsule().fill(isFocusMode ? Color.gray.opacity(0.1) : Color.blue))
                 .foregroundStyle(isFocusMode ? Color.primary : Color.white)
                 .shadow(color: isFocusMode ? .clear : .blue.opacity(0.3), radius: 8, x: 0, y: 4)
             }
@@ -468,52 +515,26 @@ struct ContentView: View {
     private var mainList: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
-                if activeTasks.isEmpty && completedTasksByDate.isEmpty {
-                    EmptyStateView()
-                        .padding(.top, 40)
+                if activeTasks.isEmpty && waitlistTasks.isEmpty && completedTasksByDate.isEmpty {
+                    EmptyStateView().padding(.top, 40)
                 } else {
-                    if !activeTasks.isEmpty {
-                        Text("Active")
-                            .font(.headline)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 24)
-                            .padding(.top, 8)
 
-                        let orderedActive = activeTasks
+                    // ── TODAY ─────────────────────────────────────────
+                    taskSection(label: "Today", badge: activeTasks.count, tasks: activeTasks, isToday: true)
 
-                        ForEach(orderedActive) { item in
-                            TaskRowView(item: item, onDelete: {
-                                withAnimation { modelContext.delete(item) }
-                            })
-                            .padding(.horizontal, 20)
-                            .onDrag {
-                                draggingTask = item
-                                return NSItemProvider(object: "\(item.id)" as NSString)
-                            }
-                            .onDrop(of: [UTType.text], delegate: ActiveTaskDropDelegate(
-                                target: item,
-                                activeProvider: { activeTasks },
-                                dragging: $draggingTask,
-                                onReorder: { from, to, active in
-                                    withAnimation(.snappy) {
-                                        applyReorder(from: from, to: to, active: active)
-                                    }
-                                }
-                            ))
-                        }
+                    // ── SOMEDAY ───────────────────────────────────────
+                    if !waitlistTasks.isEmpty {
+                        taskSection(label: "Someday", badge: waitlistTasks.count, tasks: waitlistTasks, isToday: false)
                     }
 
+                    // ── COMPLETED ─────────────────────────────────────
                     if !completedTasksByDate.isEmpty {
                         ForEach(completedTasksByDate, id: \.0) { date, tasks in
                             VStack(alignment: .leading, spacing: 12) {
                                 Text(date, format: .dateTime.month().day())
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
+                                    .font(.subheadline).fontWeight(.semibold)
                                     .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 24)
-                                    .padding(.top, 16)
-
+                                    .padding(.horizontal, 24).padding(.top, 16)
                                 ForEach(tasks) { item in
                                     TaskRowView(item: item, onDelete: {
                                         withAnimation { modelContext.delete(item) }
@@ -524,12 +545,54 @@ struct ContentView: View {
                         }
                     }
                 }
-
                 Color.clear.frame(height: 100)
             }
             .padding(.top, 10)
         }
         .scrollContentBackground(.hidden)
+    }
+
+    @ViewBuilder
+    private func taskSection(label: String, badge: Int, tasks: [TodoItem], isToday: Bool) -> some View {
+        if !tasks.isEmpty || isToday {
+            VStack(spacing: 12) {
+                HStack(spacing: 6) {
+                    Text(label)
+                        .font(.headline).foregroundStyle(.secondary)
+                    if badge > 0 {
+                        Text("\(badge)")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Capsule().fill(isToday ? Color.blue : Color.gray.opacity(0.5)))
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 24).padding(.top, 8)
+
+                if tasks.isEmpty && isToday {
+                    Text("No tasks for today — add one below or move one from Someday.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .padding(.horizontal, 24)
+                }
+
+                ForEach(tasks) { item in
+                    TaskRowView(item: item, onDelete: {
+                        withAnimation { modelContext.delete(item) }
+                    })
+                    .padding(.horizontal, 20)
+                    .modifier(DragDropModifier(
+                        enabled: isToday,
+                        item: item,
+                        draggingTask: $draggingTask,
+                        activeProvider: { activeTasks },
+                        onReorder: { from, to, active in
+                            withAnimation(.snappy) { applyReorder(from: from, to: to, active: active) }
+                        }
+                    ))
+                }
+            }
+        }
     }
 
     private func analyzeTask() {
@@ -615,7 +678,35 @@ struct ContentView: View {
     }
 }
 
-// MARK: - 6) SUBVIEWS
+/// MARK: - 6) SUBVIEWS
+
+/// Applies drag-and-drop only for Today tasks; Someday tasks are unordered.
+struct DragDropModifier: ViewModifier {
+    let enabled: Bool
+    let item: TodoItem
+    @Binding var draggingTask: TodoItem?
+    let activeProvider: () -> [TodoItem]
+    let onReorder: (Int, Int, [TodoItem]) -> Void
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .onDrag {
+                    draggingTask = item
+                    return NSItemProvider(object: "\(item.id)" as NSString)
+                }
+                .onDrop(of: [UTType.text], delegate: ActiveTaskDropDelegate(
+                    target: item,
+                    activeProvider: activeProvider,
+                    dragging: $draggingTask,
+                    onReorder: onReorder
+                ))
+        } else {
+            content
+        }
+    }
+}
+
 struct ActiveTaskDropDelegate: DropDelegate {
     let target: TodoItem
     let activeProvider: () -> [TodoItem]
@@ -777,7 +868,7 @@ struct SidebarView: View {
     }
 
     private var pending: [TodoItem] {
-        allItems.filter { !$0.isCompleted }
+        allItems.filter { !$0.isCompleted && $0.isToday }
     }
 
     var body: some View {
@@ -1258,6 +1349,17 @@ struct TaskRowView: View {
                             .padding(.vertical, 5)
                             .background(Capsule().fill(Color.gray.opacity(0.08)))
                         }
+                        // Today / Someday toggle
+                        Button {
+                            withAnimation(.snappy) { item.isToday.toggle() }
+                        } label: {
+                            Text(item.isToday ? "Today" : "Someday")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(item.isToday ? .blue : .secondary)
+                                .padding(.horizontal, 8).padding(.vertical, 5)
+                                .background(Capsule().fill(item.isToday ? Color.blue.opacity(0.1) : Color.gray.opacity(0.08)))
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }

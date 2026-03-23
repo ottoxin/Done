@@ -10,11 +10,24 @@ final class MenuBarState: ObservableObject {
     @Published var activeCount: Int = 0
     @Published var completedToday: Int = 0
 
-    private init() {}
+    // Block progress: 0.0 (just started) → 1.0 (block over), nil if no active block
+    @Published var blockProgress: Double? = nil
+    @Published var blockMinutesLeft: Int? = nil
+
+    private var blockStart: Date? = nil
+    private var blockEnd: Date? = nil
+    private var ticker: AnyCancellable? = nil
+
+    private init() {
+        // Tick every 30 s to keep the progress bar live
+        ticker = Timer.publish(every: 30, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in self?.refreshProgress() }
+    }
 
     func update(tasks: [TodoItem]) {
         let active = tasks
-            .filter { !$0.isCompleted }
+            .filter { !$0.isCompleted && $0.isToday }
             .sorted { ($0.sortOrder ?? Int.max) < ($1.sortOrder ?? Int.max) }
 
         activeCount = active.count
@@ -26,5 +39,29 @@ final class MenuBarState: ObservableObject {
         let top = active.first
         currentTaskTitle   = top?.title
         currentTaskMinutes = top.map { CalendarService.shared.estimatedMinutes(for: $0) }
+
+        // Pick up scheduled block for the top task
+        blockStart = top?.scheduledStart
+        blockEnd   = top?.scheduledEnd
+        refreshProgress()
+    }
+
+    private func refreshProgress() {
+        guard let start = blockStart, let end = blockEnd else {
+            blockProgress = nil
+            blockMinutesLeft = nil
+            return
+        }
+        let now = Date()
+        guard now >= start else {
+            // Block hasn't started yet
+            blockProgress = 0
+            blockMinutesLeft = Int(end.timeIntervalSince(now) / 60)
+            return
+        }
+        let total   = end.timeIntervalSince(start)
+        let elapsed = now.timeIntervalSince(start)
+        blockProgress    = min(1.0, elapsed / total)
+        blockMinutesLeft = max(0, Int(end.timeIntervalSince(now) / 60))
     }
 }

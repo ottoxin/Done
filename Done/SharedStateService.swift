@@ -146,12 +146,13 @@ final class SharedStateService: ObservableObject {
 
             case .add:
                 let difficulty = max(1, min(5, change.difficulty ?? 2))
-                let newOrder = (tasks.filter { !$0.isCompleted }.compactMap { $0.sortOrder }.max() ?? -1) + 1
+                let newOrder = (tasks.filter { !$0.isCompleted && $0.isToday }.compactMap { $0.sortOrder }.max() ?? -1) + 1
                 let item = TodoItem(
                     title: change.title,
                     difficultyScore: difficulty,
                     isComplex: change.isComplex ?? false,
-                    sortOrder: newOrder
+                    sortOrder: newOrder,
+                    isToday: true
                 )
                 context.insert(item)
 
