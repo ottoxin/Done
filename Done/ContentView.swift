@@ -239,117 +239,70 @@ struct SmartTodosApp: App {
     }
 }
 
-// The bar shown in the system menu bar — task name + live charge bar
+// The bar shown in the system menu bar — radial tick dial + task name
 struct MenuBarLabel: View {
     @ObservedObject var state: MenuBarState
 
-    private var hourglassIcon: String {
-        guard let p = state.blockProgress else { return "checklist" }
-        if p < 0.33 { return "hourglass.tophalf.filled" }
-        if p < 0.66 { return "hourglass"               }
-        return "hourglass.bottomhalf.filled"
+    /// Unified progress: Pomodoro in focus mode, block progress otherwise
+    private var dialProgress: Double {
+        if state.isFocusMode { return state.focusProgress }
+        if let bp = state.blockProgress { return bp }
+        return 0
+    }
+
+    private var isLive: Bool {
+        state.isFocusMode ? state.focusIsRunning : (state.blockProgress != nil)
     }
 
     var body: some View {
-        HStack(spacing: 6) {
-            if state.isFocusMode {
-                // Radial tick dial replaces everything during a Pomodoro session
-                RadialTickView(progress: state.focusProgress, isRunning: state.focusIsRunning)
-                    .frame(width: 20, height: 20)
+        HStack(spacing: 5) {
+            if state.activeCount == 0 {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.green)
             } else {
-                // Normal: hourglass + task name + charge bar
-                Image(systemName: state.activeCount == 0 ? "checkmark.circle.fill" : hourglassIcon)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(state.activeCount == 0 ? .green : .primary)
+                RadialTickView(progress: dialProgress, isActive: isLive)
+                    .frame(width: 18, height: 18)
+            }
 
-                if let title = state.currentTaskTitle {
-                    Text(title)
-                        .font(.system(size: 12, weight: .medium))
-                        .lineLimit(1)
-                        .frame(maxWidth: 150, alignment: .leading)
-
-                    if let progress = state.blockProgress {
-                        ChargeBar(progress: progress, minutesLeft: state.blockMinutesLeft)
-                    } else if let mins = state.currentTaskMinutes {
-                        Text("· \(mins)m")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    Text("Done")
-                        .font(.system(size: 12, weight: .medium))
-                }
+            if let title = state.currentTaskTitle {
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                    .frame(maxWidth: 140, alignment: .leading)
+            } else {
+                Text("Done")
+                    .font(.system(size: 12, weight: .medium))
             }
         }
         .fixedSize()
     }
 }
 
-/// Circular tick-mark dial shown in the menu bar during a Pomodoro session.
+/// Radial tick-mark dial drawn with standard SwiftUI shapes (works in MenuBarExtra).
 /// Filled ticks = elapsed; faint ticks = remaining.
 struct RadialTickView: View {
     let progress: Double   // 0.0 → 1.0
-    let isRunning: Bool
-    private let tickCount = 36  // one tick every 10°
+    let isActive: Bool
+    private let tickCount: Int = 36  // one tick every 10°
 
     var body: some View {
-        Canvas { context, size in
-            let cx: Double = size.width / 2
-            let cy: Double = size.height / 2
-            let outerR: Double = min(cx, cy) - 0.5
-            let innerR: Double = outerR * 0.60
-            let clamped: Double = min(max(progress, 0), 1)
-            let filled: Int = Int((Double(tickCount) * clamped).rounded())
+        let clamped: Double = min(max(progress, 0), 1)
+        let filled: Int = Int((Double(tickCount) * clamped).rounded())
 
-            for i in 0..<tickCount {
-                let fraction: Double = Double(i) / Double(tickCount)
-                let angle: Double = fraction * 2 * Double.pi - Double.pi / 2
-                let cosA: Double = cos(angle)
-                let sinA: Double = sin(angle)
-                let outer = CGPoint(x: cx + outerR * cosA, y: cy + outerR * sinA)
-                let inner = CGPoint(x: cx + innerR * cosA, y: cy + innerR * sinA)
-                var path = Path()
-                path.move(to: inner)
-                path.addLine(to: outer)
-                let isFilled: Bool = i < filled
-                let opacity: Double = isFilled ? 0.90 : 0.18
-                let lineWidth: Double = isFilled ? (isRunning ? 2.2 : 1.8) : 1.0
-                context.stroke(path, with: .color(Color.primary.opacity(opacity)), lineWidth: lineWidth)
+        ZStack {
+            ForEach(0..<tickCount, id: \.self) { i in
+                tickMark(index: i, isFilled: i < filled)
             }
         }
     }
-}
 
-struct ChargeBar: View {
-    let progress: Double          // 0.0 – 1.0
-    let minutesLeft: Int?
-
-    private var barColor: Color {
-        if progress > 0.85 { return .red    }
-        if progress > 0.60 { return .orange }
-        return .blue
-    }
-
-    var body: some View {
-        HStack(spacing: 5) {
-            // Capsule track + fill
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color.secondary.opacity(0.2))
-                    .frame(width: 32, height: 5)
-                Capsule()
-                    .fill(barColor)
-                    .frame(width: max(4, 32 * progress), height: 5)
-                    .animation(.linear(duration: 0.4), value: progress)
-            }
-
-            if let left = minutesLeft, left > 0 {
-                Text("\(left)m")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-        }
+    private func tickMark(index: Int, isFilled: Bool) -> some View {
+        Capsule()
+            .fill(Color.primary.opacity(isFilled ? 0.85 : 0.15))
+            .frame(width: isFilled && isActive ? 2.0 : 1.0, height: 3.5)
+            .offset(y: -6.5)
+            .rotationEffect(.degrees(Double(index) * (360.0 / Double(tickCount))))
     }
 }
 

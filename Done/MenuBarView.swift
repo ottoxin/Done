@@ -6,6 +6,7 @@ import SwiftData
 struct MenuBarTaskView: View {
     @Query private var allItems: [TodoItem]
     @ObservedObject private var calendar = CalendarService.shared
+    @ObservedObject private var menuState = MenuBarState.shared
 
     private var activeTasks: [TodoItem] {
         allItems
@@ -55,9 +56,48 @@ struct MenuBarTaskView: View {
 
     @ViewBuilder
     private var nowCard: some View {
-        if let task = currentTask {
+        if menuState.isFocusMode, let task = currentTask {
+            // ── Focus / Pomodoro card ──
+            VStack(spacing: 10) {
+                HStack {
+                    Label("FOCUSING", systemImage: "bolt.fill")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .tracking(1.5)
+                    Spacer()
+                    let mins: Int = menuState.focusTimeLeft / 60
+                    let secs: Int = menuState.focusTimeLeft % 60
+                    Text(String(format: "%02d:%02d", mins, secs))
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .monospacedDigit()
+                }
+
+                HStack(spacing: 14) {
+                    RadialTickView(progress: menuState.focusProgress, isActive: menuState.focusIsRunning)
+                        .frame(width: 44, height: 44)
+                        .colorInvert()       // white ticks on coloured bg
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(task.title)
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .lineLimit(2)
+                        Text(menuState.focusIsRunning ? "Timer running" : "Paused")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                    Spacer()
+                }
+            }
+            .padding(14)
+            .background(
+                LinearGradient(colors: [.indigo, .indigo.opacity(0.75)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+            )
+        } else if let task = currentTask {
+            // ── Normal "NOW" card ──
             VStack(alignment: .leading, spacing: 0) {
-                // Label row
                 HStack {
                     Label("NOW", systemImage: "bolt.fill")
                         .font(.system(size: 9, weight: .bold))
@@ -66,7 +106,6 @@ struct MenuBarTaskView: View {
 
                     Spacer()
 
-                    // Progress dots
                     HStack(spacing: 4) {
                         ForEach(0..<min(activeTasks.count, 5), id: \.self) { i in
                             Circle()
@@ -84,14 +123,12 @@ struct MenuBarTaskView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 6)
 
-                // Task title
                 Text(task.title)
                     .font(.system(size: 15, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
                     .lineLimit(2)
                     .padding(.horizontal, 14)
 
-                // Meta row
                 HStack(spacing: 10) {
                     let mins = CalendarService.shared.estimatedMinutes(for: task)
                     Label("\(mins)m", systemImage: "clock")
