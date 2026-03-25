@@ -261,8 +261,11 @@ struct MenuBarLabel: View {
                     .font(.system(size: 13))
                     .foregroundStyle(.green)
             } else {
-                RadialTickView(progress: dialProgress, isActive: isLive)
-                    .frame(width: 18, height: 18)
+                // NSImage rendering is the only way to guarantee redraws in
+                // MenuBarExtra labels (NSStatusBarButton ignores SwiftUI Canvas/ZStack).
+                Image(nsImage: RadialTickRenderer.render(
+                    progress: dialProgress, isActive: isLive, size: 18
+                ))
             }
 
             if let title = state.currentTaskTitle {
@@ -279,12 +282,44 @@ struct MenuBarLabel: View {
     }
 }
 
-/// Radial tick-mark dial drawn with standard SwiftUI shapes (works in MenuBarExtra).
-/// Filled ticks = elapsed; faint ticks = remaining.
+/// Draws the radial tick dial into an NSImage (guaranteed to render in menu bar).
+enum RadialTickRenderer {
+    static func render(progress: Double, isActive: Bool, size: CGFloat) -> NSImage {
+        let tickCount = 36
+        let clamped = min(max(progress, 0), 1)
+        let filled = Int((Double(tickCount) * clamped).rounded())
+
+        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
+            let cx = size / 2, cy = size / 2
+            let outerR = size / 2 - 0.5
+            let innerR = outerR * 0.60
+
+            for i in 0..<tickCount {
+                let fraction = Double(i) / Double(tickCount)
+                let angle = fraction * 2 * .pi - .pi / 2
+                let cosA = cos(angle), sinA = sin(angle)
+
+                let path = NSBezierPath()
+                path.move(to: NSPoint(x: cx + innerR * cosA, y: cy + innerR * sinA))
+                path.line(to: NSPoint(x: cx + outerR * cosA, y: cy + outerR * sinA))
+
+                let isFilled = i < filled
+                path.lineWidth = isFilled && isActive ? 2.0 : (isFilled ? 1.5 : 0.8)
+                NSColor.labelColor.withAlphaComponent(isFilled ? 0.85 : 0.15).setStroke()
+                path.stroke()
+            }
+            return true
+        }
+        image.isTemplate = true   // adapts to menu bar light/dark automatically
+        return image
+    }
+}
+
+/// Radial tick-mark dial (SwiftUI shapes version — for use inside popovers / main window).
 struct RadialTickView: View {
     let progress: Double   // 0.0 → 1.0
     let isActive: Bool
-    private let tickCount: Int = 36  // one tick every 10°
+    private let tickCount: Int = 36
 
     var body: some View {
         let clamped: Double = min(max(progress, 0), 1)

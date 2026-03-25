@@ -159,10 +159,6 @@ final class CalendarService: ObservableObject {
         var morningPool = todayFreeSlots.filter { $0.start < noon }
         var afternoonPool = todayFreeSlots.filter { $0.start >= noon }
 
-        // Heavy tasks (difficulty ≥ 3) prefer mornings; light ones prefer afternoons
-        let heavy = tasks.filter { $0.difficultyScore >= 3 }
-        let light  = tasks.filter { $0.difficultyScore < 3 }
-
         var blocks: [ScheduledTaskBlock] = []
         var totalUsed: TimeInterval = 0
 
@@ -200,16 +196,15 @@ final class CalendarService: ObservableObject {
             return false
         }
 
-        // Schedule heavy tasks: morning first, spill into afternoon
-        for task in heavy {
-            if !place(task, into: &morningPool) {
-                place(task, into: &afternoonPool)
-            }
-        }
-        // Schedule light tasks: afternoon first, spill into morning
-        for task in light {
-            if !place(task, into: &afternoonPool) {
-                place(task, into: &morningPool)
+        // Schedule tasks in user's sort order (top = highest priority).
+        // Heavy tasks (≥ 3) prefer morning; light tasks prefer afternoon — but
+        // user priority always wins over time-of-day preference.
+        for task in tasks {
+            let prefersmorning = task.difficultyScore >= 3
+            if prefersmorning {
+                if !place(task, into: &morningPool) { place(task, into: &afternoonPool) }
+            } else {
+                if !place(task, into: &afternoonPool) { place(task, into: &morningPool) }
             }
         }
 

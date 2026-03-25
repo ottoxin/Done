@@ -19,6 +19,8 @@ Fields:
 - `freeMinutesToday` — total free time left today (after calendar events)
 - `tasks[]` — each task has:
   - `title`, `difficulty` (1–5), `isComplex`, `isCompleted`, `sortOrder` (0 = top)
+  - `isToday` — true = planned for today, false = someday/waitlist
+  - `estimatedMinutes` — AI or heuristic time estimate
   - `scheduledStart` / `scheduledEnd` — ISO8601, null if not yet scheduled
 
 ## Writing updates

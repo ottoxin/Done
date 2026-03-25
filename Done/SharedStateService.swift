@@ -23,7 +23,9 @@ struct ExportedTask: Codable {
     var difficulty: Int          // 1-5
     var isComplex: Bool
     var isCompleted: Bool
+    var isToday: Bool
     var sortOrder: Int
+    var estimatedMinutes: Int?
     var scheduledStart: Date?
     var scheduledEnd: Date?
 }
@@ -84,7 +86,9 @@ final class SharedStateService: ObservableObject {
                 difficulty: item.difficultyScore,
                 isComplex: item.isComplex,
                 isCompleted: item.isCompleted,
+                isToday: item.isToday,
                 sortOrder: item.sortOrder ?? 999,
+                estimatedMinutes: item.estimatedMinutes ?? CalendarService.shared.estimatedMinutes(for: item),
                 scheduledStart: item.scheduledStart,
                 scheduledEnd: item.scheduledEnd
             )

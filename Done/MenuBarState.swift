@@ -29,8 +29,8 @@ final class MenuBarState: ObservableObject {
     private var ticker: AnyCancellable? = nil
 
     private init() {
-        // Tick every 30 s to keep the progress bar live
-        ticker = Timer.publish(every: 30, on: .main, in: .common)
+        // Tick every 10 s to keep the dial progress visually responsive
+        ticker = Timer.publish(every: 10, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in self?.refreshProgress() }
     }
