@@ -2263,17 +2263,23 @@ struct FocusModeView: View {
 
     private var accentGradient: LinearGradient {
         if isRunning {
+            // Deep warm charcoal — calm, focused
             return LinearGradient(
-                colors: [Color(red: 0.25, green: 0.35, blue: 0.95), Color(red: 0.45, green: 0.25, blue: 0.90)],
+                colors: [Color(red: 0.10, green: 0.10, blue: 0.12), Color(red: 0.08, green: 0.08, blue: 0.10)],
                 startPoint: .topLeading, endPoint: .bottomTrailing
             )
         } else {
+            // Slightly lighter dark
             return LinearGradient(
-                colors: [Color(red: 0.3, green: 0.3, blue: 0.35), Color(red: 0.2, green: 0.2, blue: 0.25)],
+                colors: [Color(red: 0.12, green: 0.12, blue: 0.14), Color(red: 0.09, green: 0.09, blue: 0.11)],
                 startPoint: .topLeading, endPoint: .bottomTrailing
             )
         }
     }
+
+    /// Muted warm accent for the progress ring
+    private let ringAccent = Color(red: 0.85, green: 0.75, blue: 0.55) // warm gold
+    private let ringAccentSoft = Color(red: 0.70, green: 0.62, blue: 0.45)
 
     private func projectColor(_ name: String) -> Color {
         let colors: [Color] = [.blue, .purple, .orange, .teal, .pink, .green, .indigo, .mint, .cyan, .red]
@@ -2291,80 +2297,77 @@ struct FocusModeView: View {
 
                     // Timer ring
                     ZStack {
-                        // Track
+                        // Track — subtle ring
                         Circle()
-                            .stroke(Color.white.opacity(0.08), lineWidth: 6)
+                            .stroke(Color.white.opacity(0.06), lineWidth: 3)
                             .frame(width: ringSize, height: ringSize)
 
-                        // Progress arc
+                        // Progress arc — warm gold
                         Circle()
                             .trim(from: 0, to: CGFloat(progress))
                             .stroke(
-                                AngularGradient(
-                                    colors: [.cyan, .blue, .purple, .blue],
-                                    center: .center
-                                ),
-                                style: StrokeStyle(lineWidth: 6, lineCap: .round)
+                                ringAccent,
+                                style: StrokeStyle(lineWidth: 3, lineCap: .round)
                             )
                             .rotationEffect(.degrees(-90))
                             .animation(.linear(duration: 1), value: timeLeft)
                             .frame(width: ringSize, height: ringSize)
 
-                        // Glow behind progress tip
+                        // Soft glow at tip
                         if isRunning {
                             Circle()
-                                .trim(from: max(0, CGFloat(progress) - 0.02), to: CGFloat(progress))
-                                .stroke(Color.cyan.opacity(0.6), lineWidth: 10)
-                                .blur(radius: 8)
+                                .trim(from: max(0, CGFloat(progress) - 0.015), to: CGFloat(progress))
+                                .stroke(ringAccent.opacity(0.4), lineWidth: 6)
+                                .blur(radius: 6)
                                 .rotationEffect(.degrees(-90))
                                 .frame(width: ringSize, height: ringSize)
                         }
 
                         // Center content
-                        VStack(spacing: 6) {
+                        VStack(spacing: 8) {
                             Text(formatTime(timeLeft))
-                                .font(.system(size: ringSize * 0.26, weight: .thin, design: .rounded))
-                                .foregroundStyle(.white)
+                                .font(.system(size: ringSize * 0.26, weight: .ultraLight, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.9))
                                 .contentTransition(.numericText())
                                 .monospacedDigit()
 
-                            Text(isRunning ? "FOCUSING" : (didFinishThisRun ? "DONE" : "READY"))
-                                .font(.system(size: 11, weight: .bold))
-                                .tracking(3)
-                                .foregroundStyle(isRunning ? .cyan : .white.opacity(0.5))
+                            Text(isRunning ? "FOCUSING" : (didFinishThisRun ? "COMPLETE" : "READY"))
+                                .font(.system(size: 10, weight: .semibold))
+                                .tracking(4)
+                                .foregroundStyle(isRunning ? ringAccent : .white.opacity(0.3))
                         }
                     }
 
                     Spacer().frame(height: 28)
 
                     // Task info
-                    VStack(spacing: 8) {
+                    VStack(spacing: 10) {
                         Text(currentTask?.title ?? "No tasks pending!")
-                            .font(.system(size: 24, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
+                            .font(.system(size: 22, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.85))
                             .multilineTextAlignment(.center)
                             .lineLimit(2)
-                            .padding(.horizontal, 20)
+                            .padding(.horizontal, 24)
 
                         if let proj = currentTask?.project {
                             HStack(spacing: 5) {
                                 Circle()
-                                    .fill(projectColor(proj))
-                                    .frame(width: 6, height: 6)
+                                    .fill(ringAccent.opacity(0.6))
+                                    .frame(width: 5, height: 5)
                                 Text(proj)
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(.white.opacity(0.6))
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.35))
                             }
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 4)
-                            .background(Capsule().fill(.white.opacity(0.08)))
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(.white.opacity(0.05)))
                         }
                     }
 
                     Spacer().frame(height: 32)
 
                     // Controls
-                    HStack(spacing: 32) {
+                    HStack(spacing: 28) {
                         // Reset
                         Button {
                             withAnimation(.snappy) {
@@ -2376,14 +2379,15 @@ struct FocusModeView: View {
                             }
                         } label: {
                             Image(systemName: "arrow.counterclockwise")
-                                .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.5))
-                                .frame(width: 48, height: 48)
-                                .background(Circle().fill(.white.opacity(0.08)))
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.3))
+                                .frame(width: 44, height: 44)
+                                .background(Circle().fill(.white.opacity(0.05)))
+                                .overlay(Circle().stroke(.white.opacity(0.06), lineWidth: 1))
                         }
                         .buttonStyle(.plain)
 
-                        // Play/Pause — larger
+                        // Play/Pause
                         Button {
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                                 if !isRunning { didFinishThisRun = false }
@@ -2393,25 +2397,20 @@ struct FocusModeView: View {
                         } label: {
                             ZStack {
                                 Circle()
-                                    .fill(.white)
-                                    .frame(width: 68, height: 68)
-                                    .shadow(color: .white.opacity(0.15), radius: 20, y: 4)
+                                    .fill(ringAccent)
+                                    .frame(width: 60, height: 60)
+                                    .shadow(color: ringAccent.opacity(0.2), radius: 16, y: 4)
 
                                 Image(systemName: isRunning ? "pause.fill" : "play.fill")
-                                    .font(.system(size: 24, weight: .bold))
-                                    .foregroundStyle(
-                                        isRunning
-                                            ? Color(red: 0.3, green: 0.3, blue: 0.95)
-                                            : Color(red: 0.2, green: 0.2, blue: 0.3)
-                                    )
-                                    .offset(x: isRunning ? 0 : 2) // optical center for play
+                                    .font(.system(size: 20, weight: .semibold))
+                                    .foregroundStyle(Color(red: 0.10, green: 0.10, blue: 0.10))
+                                    .offset(x: isRunning ? 0 : 1.5)
                             }
                         }
                         .buttonStyle(.plain)
 
-                        // Skip
+                        // Complete task
                         Button {
-                            // Complete current task and move to next
                             if let task = currentTask {
                                 withAnimation(.snappy) {
                                     task.isCompleted = true
@@ -2425,10 +2424,11 @@ struct FocusModeView: View {
                             }
                         } label: {
                             Image(systemName: "checkmark")
-                                .font(.system(size: 18, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.5))
-                                .frame(width: 48, height: 48)
-                                .background(Circle().fill(.white.opacity(0.08)))
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.3))
+                                .frame(width: 44, height: 44)
+                                .background(Circle().fill(.white.opacity(0.05)))
+                                .overlay(Circle().stroke(.white.opacity(0.06), lineWidth: 1))
                         }
                         .buttonStyle(.plain)
                         .help("Complete task")
