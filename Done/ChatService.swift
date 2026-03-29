@@ -64,11 +64,9 @@ final class ChatService: ObservableObject {
     /// Check if the selected CLI is installed and accessible.
     func checkAvailability() {
         let cmd = cliProvider.command
-        Task.detached { [weak self] in
-            let result = Self.which(cmd)
-            await MainActor.run {
-                self?.isAvailable = result != nil
-            }
+        Task { @MainActor in
+            let result = await Task.detached { Self.which(cmd) }.value
+            self.isAvailable = result != nil
         }
     }
 
@@ -129,15 +127,14 @@ final class ChatService: ObservableObject {
         let provider = cliProvider
         let memory = readMemory()
 
-        Task.detached { [weak self] in
-            let response = await Self.runCLI(provider: provider, prompt: trimmed, memory: memory)
-            await MainActor.run {
-                guard let self else { return }
-                if let idx = self.messages.firstIndex(where: { $0.id == placeholderID }) {
-                    self.messages[idx].text = response
-                }
-                self.isStreaming = false
+        Task { @MainActor in
+            let response = await Task.detached {
+                await Self.runCLI(provider: provider, prompt: trimmed, memory: memory)
+            }.value
+            if let idx = self.messages.firstIndex(where: { $0.id == placeholderID }) {
+                self.messages[idx].text = response
             }
+            self.isStreaming = false
         }
     }
 

@@ -63,7 +63,7 @@ final class CalendarService: ObservableObject {
 
     var isAuthorized: Bool {
         if #available(macOS 14.0, *) {
-            return authorizationStatus == .fullAccess || authorizationStatus == .authorized
+            return authorizationStatus == .fullAccess
         } else {
             return authorizationStatus == .authorized
         }

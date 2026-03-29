@@ -2812,8 +2812,6 @@ struct ProjectTimeChart: View {
 
                     // Stacked area for each project
                     ForEach(Array(allProjectKeys.enumerated()), id: \.element) { projIdx, proj in
-                        let color = proj == "_none" ? Color.gray : projectColor(proj)
-
                         Path { path in
                             // Build cumulative stack
                             var bottomPoints = [CGPoint]()

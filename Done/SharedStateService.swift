@@ -78,7 +78,6 @@ final class SharedStateService: ObservableObject {
     // MARK: - Export
 
     func exportState(tasks: [TodoItem], freeMinutes: Int) {
-        let cal = Calendar.current
         let dayFmt = DateFormatter()
         dayFmt.dateFormat = "yyyy-MM-dd"
 
@@ -117,7 +116,8 @@ final class SharedStateService: ObservableObject {
     func startWatching() {
         pollTimer?.invalidate()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.checkForUpdates() }
+            guard let self else { return }
+            Task { @MainActor [self] in self.checkForUpdates() }
         }
     }
 
