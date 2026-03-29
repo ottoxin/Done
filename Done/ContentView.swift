@@ -25,6 +25,8 @@ final class TodoItem {
     var scheduledEnd: Date?
     // Whether this task is planned for today vs sitting in the waitlist
     var isToday: Bool = true
+    // Project / category this task belongs to (nil = uncategorized)
+    var project: String?
 
     init(
         title: String,
@@ -32,7 +34,8 @@ final class TodoItem {
         priority: Int = 1,
         isComplex: Bool = false,
         sortOrder: Int? = nil,
-        isToday: Bool = true
+        isToday: Bool = true,
+        project: String? = nil
     ) {
         self.title = title
         self.isCompleted = false
@@ -42,6 +45,7 @@ final class TodoItem {
         self.isComplex = isComplex
         self.sortOrder = sortOrder
         self.isToday = isToday
+        self.project = project
     }
 }
 
@@ -220,7 +224,7 @@ struct SmartTodosApp: App {
     var body: some Scene {
         WindowGroup { ContentView() }
             .modelContainer(sharedModelContainer)
-            .defaultSize(width: 960, height: 680)
+            .defaultSize(width: 1120, height: 720)
         #if os(macOS)
             .windowStyle(.hiddenTitleBar)
         #endif
@@ -261,8 +265,6 @@ struct MenuBarLabel: View {
                     .font(.system(size: 13))
                     .foregroundStyle(.green)
             } else {
-                // NSImage rendering is the only way to guarantee redraws in
-                // MenuBarExtra labels (NSStatusBarButton ignores SwiftUI Canvas/ZStack).
                 Image(nsImage: RadialTickRenderer.render(
                     progress: dialProgress, isActive: isLive, size: 18
                 ))
@@ -310,7 +312,7 @@ enum RadialTickRenderer {
             }
             return true
         }
-        image.isTemplate = true   // adapts to menu bar light/dark automatically
+        image.isTemplate = true
         return image
     }
 }
@@ -360,17 +362,20 @@ struct ContentView: View {
     @State private var deepWorkToday = DeepWorkStore.countToday()
     @State private var draggingTask: TodoItem?
 
+    // Navigation
+    @State private var selectedTab: SidebarTab = .dashboard
+    @State private var showChat = false
+    @State private var selectedProject: String? = nil
+
     @ObservedObject private var calendar = CalendarService.shared
     @ObservedObject private var sharedState = SharedStateService.shared
 
     private func nextActiveSortOrder() -> Int {
-        // Only consider Today tasks so Someday tasks don't pollute the order space
         let today = items.filter { !$0.isCompleted && $0.isToday }
         return (today.compactMap { $0.sortOrder }.max() ?? -1) + 1
     }
 
     private func normalizeActiveSortOrdersIfNeeded() {
-        // Only normalize Today tasks — Someday tasks don't need a stable sortOrder
         let today = items.filter { !$0.isCompleted && $0.isToday }
         guard !today.isEmpty else { return }
 
@@ -430,62 +435,65 @@ struct ContentView: View {
         return grouped.sorted { $0.key > $1.key }
     }
 
+    /// All unique project names from tasks
+    private var allProjects: [String] {
+        Array(Set(items.compactMap { $0.project })).sorted()
+    }
+
+    /// Tasks completed this week
+    private var completedThisWeek: Int {
+        let cal = Calendar.current
+        let startOfWeek = cal.date(from: cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: Date())) ?? Date()
+        return items.filter {
+            $0.isCompleted && ($0.completedAt ?? .distantPast) >= startOfWeek
+        }.count
+    }
+
     var body: some View {
-        NavigationSplitView {
-            SidebarView(
-                activeCount: activeTasks.count,
-                allItems: displayItems,
-                deepWorkCountToday: deepWorkToday,
-                calendar: calendar
-            )
-            .navigationSplitViewColumnWidth(min: 220, ideal: 260)
-        } detail: {
-            ZStack(alignment: .bottom) {
-                Color(NSColor.windowBackgroundColor).ignoresSafeArea()
+        HStack(spacing: 0) {
+            // Icon sidebar
+            iconSidebar
 
-                VStack(spacing: 0) {
-                    header
-
-                    if isFocusMode {
-                        FocusModeView(
-                            tasks: activeTasks,
-                            sessionsToday: deepWorkToday,
-                            onFinishSession: {
-                                DeepWorkStore.incrementToday()
-                                deepWorkToday = DeepWorkStore.countToday()
-                            }
-                        )
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                    } else {
-                        mainList
-                    }
-                }
-
-                if !isFocusMode {
-                    InputBarView(
-                        text: $newTaskTitle,
-                        isAnalyzing: isAnalyzing,
-                        onCommit: analyzeTask
-                    )
-                    .padding(.bottom, 10)
+            // Main content
+            Group {
+                switch selectedTab {
+                case .dashboard:
+                    dashboardView
+                case .tasks:
+                    tasksView
+                case .focus:
+                    focusView
+                case .schedule:
+                    scheduleView
+                case .settings:
+                    SettingsView()
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Chat panel
+            if showChat {
+                Divider()
+                ChatView()
+                    .frame(width: 340)
+                    .transition(.move(edge: .trailing))
+            }
         }
+        .background(Color(NSColor.windowBackgroundColor))
         .sheet(isPresented: $showApprovalSheet) {
             TaskApprovalView(
                 title: pendingTaskTitle,
                 analysis: pendingAnalysis,
+                projects: allProjects,
                 onConfirmSingle: addSingleTask,
                 onConfirmSplit: addSplitTasks
             )
-            .presentationDetents([.fraction(0.42), .medium])
+            .presentationDetents([.fraction(0.5), .medium])
             .presentationCornerRadius(30)
             .presentationBackground(.ultraThinMaterial)
         }
         .onAppear {
             deepWorkToday = DeepWorkStore.countToday()
-            // One-time migration: isToday was added after initial release.
-            // SwiftData defaults new Bool columns to false — flip all existing tasks back to today.
             if !UserDefaults.standard.bool(forKey: "todayFieldMigrated") {
                 for item in items where !item.isCompleted {
                     item.isToday = true
@@ -529,58 +537,654 @@ struct ContentView: View {
         }
     }
 
-    private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(isFocusMode ? "Deep Work" : "Today")
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+    // MARK: - Icon Sidebar
 
-                Text(Date(), format: .dateTime.weekday(.wide).month().day())
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
+    enum SidebarTab: String, CaseIterable {
+        case dashboard, tasks, focus, schedule, settings
+    }
+
+    private var iconSidebar: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 4) {
+                sidebarIcon("square.grid.2x2", selectedIcon: "square.grid.2x2.fill", tab: .dashboard, label: "Home", badge: 0)
+                sidebarIcon("checkmark.circle", selectedIcon: "checkmark.circle.fill", tab: .tasks, label: "Tasks", badge: activeTasks.count)
+                sidebarIcon("hourglass", selectedIcon: "hourglass.circle.fill", tab: .focus, label: "Focus", badge: 0)
+                sidebarIcon("calendar", selectedIcon: "calendar.circle.fill", tab: .schedule, label: "Schedule", badge: 0)
             }
+            .padding(.top, 48)
 
             Spacer()
 
-            Button(action: {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { isFocusMode.toggle() }
-            }) {
-                HStack(spacing: 8) {
-                    Image(systemName: isFocusMode ? "xmark" : "timer")
-                        .font(.system(size: 16, weight: .bold))
-                    Text(isFocusMode ? "End" : "Focus")
-                        .fontWeight(.semibold)
+            VStack(spacing: 4) {
+                // Chat toggle
+                Button {
+                    withAnimation(.spring(response: 0.3)) { showChat.toggle() }
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: showChat ? "bubble.left.and.bubble.right.fill" : "bubble.left.and.bubble.right")
+                            .font(.system(size: 16))
+                            .foregroundStyle(showChat ? .blue : .secondary)
+                        Text("Chat")
+                            .font(.system(size: 9))
+                            .foregroundStyle(showChat ? .blue : .secondary)
+                    }
+                    .frame(width: 52, height: 44)
+                    .background(showChat ? Color.blue.opacity(0.1) : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
-                .frame(width: 118, height: 36)
-                .background(Capsule().fill(isFocusMode ? Color.gray.opacity(0.1) : Color.blue))
-                .foregroundStyle(isFocusMode ? Color.primary : Color.white)
-                .shadow(color: isFocusMode ? .clear : .blue.opacity(0.3), radius: 8, x: 0, y: 4)
+                .buttonStyle(.plain)
+
+                sidebarIcon("gearshape", selectedIcon: "gearshape.fill", tab: .settings, label: "Settings", badge: 0)
+            }
+            .padding(.bottom, 16)
+        }
+        .frame(width: 68)
+        .background(
+            Color(NSColor.controlBackgroundColor).opacity(0.3)
+        )
+    }
+
+    private func sidebarIcon(_ icon: String, selectedIcon: String, tab: SidebarTab, label: String, badge: Int) -> some View {
+        let isSelected = selectedTab == tab
+        return Button {
+            withAnimation(.spring(response: 0.3)) { selectedTab = tab }
+        } label: {
+            VStack(spacing: 2) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: isSelected ? selectedIcon : icon)
+                        .font(.system(size: 17))
+                        .foregroundStyle(isSelected ? .blue : .secondary)
+
+                    if badge > 0 {
+                        Text("\(badge)")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.red))
+                            .offset(x: 6, y: -4)
+                    }
+                }
+                Text(label)
+                    .font(.system(size: 9))
+                    .foregroundStyle(isSelected ? .blue : .secondary)
+            }
+            .frame(width: 52, height: 44)
+            .background(isSelected ? Color.blue.opacity(0.08) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Dashboard View
+
+    private var dashboardView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                // Greeting
+                greetingHeader
+                    .padding(.horizontal, 32)
+                    .padding(.top, 28)
+
+                // Stats row — equal-width cards
+                HStack(spacing: 12) {
+                    statsCard(
+                        title: "Weekly Tasks",
+                        value: "\(completedThisWeek)",
+                        subtitle: "Completed this week",
+                        icon: "checkmark.circle.fill",
+                        color: .green
+                    )
+                    .frame(maxWidth: .infinity)
+
+                    statsCard(
+                        title: "Today",
+                        value: "\(activeTasks.count)",
+                        subtitle: "Pending tasks",
+                        icon: "list.bullet",
+                        color: .blue
+                    )
+                    .frame(maxWidth: .infinity)
+
+                    statsCard(
+                        title: "Free Time",
+                        value: calendar.totalFreeMinutesToday > 0
+                            ? "\(calendar.totalFreeMinutesToday / 60)h \(calendar.totalFreeMinutesToday % 60)m"
+                            : "--",
+                        subtitle: "Available today",
+                        icon: "clock.fill",
+                        color: .teal
+                    )
+                    .frame(maxWidth: .infinity)
+
+                    statsCard(
+                        title: "Deep Work",
+                        value: "\(deepWorkToday)",
+                        subtitle: "Sessions today",
+                        icon: "flame.fill",
+                        color: .orange
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 32)
+
+                // Two-column: Tasks + Schedule
+                HStack(alignment: .top, spacing: 16) {
+                    // Current tasks card
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Text("Today's Tasks")
+                                .font(.headline)
+                            Spacer()
+                            Text("\(activeTasks.count) tasks")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if activeTasks.isEmpty {
+                            HStack {
+                                Spacer()
+                                VStack(spacing: 8) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 28))
+                                        .foregroundStyle(.green)
+                                    Text("All caught up!")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                            }
+                            .padding(.vertical, 20)
+                        } else {
+                            ForEach(activeTasks.prefix(6)) { item in
+                                dashboardTaskRow(item)
+                            }
+                            if activeTasks.count > 6 {
+                                Text("+ \(activeTasks.count - 6) more")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.leading, 4)
+                            }
+                        }
+                    }
+                    .padding(20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color(NSColor.controlBackgroundColor))
+                            .shadow(color: .black.opacity(0.04), radius: 8, y: 4)
+                    )
+
+                    // Schedule + Projects column
+                    VStack(spacing: 16) {
+                        // Schedule card
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Label("Schedule", systemImage: "calendar")
+                                    .font(.headline)
+                                Spacer()
+                                if calendar.totalFreeMinutesToday > 0 {
+                                    Text("\(calendar.totalFreeMinutesToday)m free")
+                                        .font(.caption)
+                                        .foregroundStyle(.green)
+                                }
+                            }
+
+                            if calendar.scheduledBlocks.isEmpty {
+                                Text("No scheduled blocks yet.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(calendar.scheduledBlocks.prefix(4)) { block in
+                                    HStack(spacing: 8) {
+                                        RoundedRectangle(cornerRadius: 2)
+                                            .fill(Color.blue.opacity(0.6))
+                                            .frame(width: 3, height: 28)
+                                        VStack(alignment: .leading, spacing: 1) {
+                                            Text(block.taskTitle)
+                                                .font(.system(size: 12, weight: .medium))
+                                                .lineLimit(1)
+                                            Text(block.formattedTime)
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        Text("\(block.durationMinutes)m")
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(20)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(Color(NSColor.controlBackgroundColor))
+                                .shadow(color: .black.opacity(0.04), radius: 8, y: 4)
+                        )
+
+                        // Projects card
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Projects")
+                                .font(.headline)
+
+                            if allProjects.isEmpty {
+                                Text("No projects yet. Add a project when creating tasks.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(allProjects, id: \.self) { proj in
+                                    let active = items.filter { $0.project == proj && !$0.isCompleted }
+                                    let completed = items.filter { $0.project == proj && $0.isCompleted }
+                                    let totalMins = active.map { CalendarService.shared.estimatedMinutes(for: $0) }.reduce(0, +)
+                                    let completedMins = completed.map { CalendarService.shared.estimatedMinutes(for: $0) }.reduce(0, +)
+                                    let color = projectColor(proj)
+
+                                    VStack(spacing: 6) {
+                                        HStack(spacing: 8) {
+                                            Circle()
+                                                .fill(color)
+                                                .frame(width: 8, height: 8)
+                                            Text(proj)
+                                                .font(.system(size: 12, weight: .semibold))
+                                            Spacer()
+                                            Text("\(active.count) active")
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(.secondary)
+                                        }
+
+                                        // Time bar
+                                        HStack(spacing: 8) {
+                                            let totalAll = totalMins + completedMins
+                                            GeometryReader { geo in
+                                                let fraction: CGFloat = totalAll > 0
+                                                    ? CGFloat(completedMins) / CGFloat(totalAll)
+                                                    : 0
+                                                ZStack(alignment: .leading) {
+                                                    RoundedRectangle(cornerRadius: 3)
+                                                        .fill(color.opacity(0.12))
+                                                        .frame(height: 6)
+                                                    RoundedRectangle(cornerRadius: 3)
+                                                        .fill(color.opacity(0.6))
+                                                        .frame(width: geo.size.width * fraction, height: 6)
+                                                }
+                                            }
+                                            .frame(height: 6)
+
+                                            Text(formatProjectTime(completedMins + totalMins))
+                                                .font(.system(size: 9, weight: .medium))
+                                                .foregroundStyle(.tertiary)
+                                                .frame(width: 36, alignment: .trailing)
+                                        }
+                                    }
+                                    .padding(.vertical, 2)
+                                }
+                            }
+                        }
+                        .padding(20)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(Color(NSColor.controlBackgroundColor))
+                                .shadow(color: .black.opacity(0.04), radius: 8, y: 4)
+                        )
+                    }
+                }
+                .padding(.horizontal, 32)
+
+                // Quick add
+                HStack(spacing: 12) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.blue.opacity(0.7))
+
+                    TextField("Quick add a task...", text: $newTaskTitle)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 14))
+                        .onSubmit { analyzeTask() }
+                    #if os(macOS)
+                        .modifier(DisableFocusRingIfAvailable())
+                    #endif
+
+                    if isAnalyzing {
+                        ProgressView().scaleEffect(0.7)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color(NSColor.controlBackgroundColor))
+                        .shadow(color: .black.opacity(0.04), radius: 8, y: 4)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Color.blue.opacity(0.08), lineWidth: 1)
+                )
+                .padding(.horizontal, 32)
+
+                // Momentum + Project Time
+                HStack(alignment: .top, spacing: 16) {
+                    // Heatmap
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Momentum")
+                                .font(.headline)
+                            Spacer()
+                            Text("Last 4 weeks")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+
+                        HeatmapView(items: items)
+                    }
+                    .padding(20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color(NSColor.controlBackgroundColor))
+                            .shadow(color: .black.opacity(0.04), radius: 8, y: 4)
+                    )
+                    .frame(maxWidth: .infinity)
+
+                    // Project time distribution
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Time by Project")
+                                .font(.headline)
+                            Spacer()
+                            Text("14 days")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+
+                        ProjectTimeChart(items: items, projects: allProjects, projectColor: projectColor)
+                    }
+                    .padding(20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color(NSColor.controlBackgroundColor))
+                            .shadow(color: .black.opacity(0.04), radius: 8, y: 4)
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .padding(.horizontal, 32)
+
+                Color.clear.frame(height: 20)
+            }
+        }
+    }
+
+    private var greetingHeader: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(Date(), format: .dateTime.weekday(.wide).month(.wide).day())
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .tracking(1.5)
+
+            Text(greetingText)
+                .font(.system(size: 32, weight: .bold, design: .rounded))
+
+            if let top = activeTasks.first {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.right.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.blue)
+                    Text("Next up: **\(top.title)**")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                    if let proj = top.project {
+                        Text(proj)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(projectColor(proj))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(projectColor(proj).opacity(0.1))
+                            .clipShape(Capsule())
+                    }
+                }
+                .padding(.top, 2)
+            }
+        }
+    }
+
+    private var greetingText: String {
+        let hour = Calendar.current.component(.hour, from: Date())
+        switch hour {
+        case 5..<12:  return "Good morning."
+        case 12..<17: return "Good afternoon."
+        case 17..<22: return "Good evening."
+        default:      return "Good night."
+        }
+    }
+
+    private func statsCard(title: String, value: String, subtitle: String, icon: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(color)
+                    .frame(width: 26, height: 26)
+                    .background(Circle().fill(color.opacity(0.12)))
+                Spacer()
+            }
+
+            Text(value)
+                .font(.system(size: 24, weight: .bold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.top, 2)
+
+            Text(subtitle)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(NSColor.controlBackgroundColor))
+                .shadow(color: .black.opacity(0.04), radius: 8, y: 4)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(color.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private func dashboardTaskRow(_ item: TodoItem) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                withAnimation(.snappy) {
+                    item.isCompleted = true
+                    item.completedAt = Date()
+                }
+            } label: {
+                ZStack {
+                    Circle()
+                        .stroke(involvementColor(involvement(for: item.difficultyScore)).opacity(0.4), lineWidth: 1.5)
+                        .frame(width: 20, height: 20)
+                    Circle()
+                        .fill(involvementColor(involvement(for: item.difficultyScore)).opacity(0.08))
+                        .frame(width: 20, height: 20)
+                }
             }
             .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+
+                HStack(spacing: 6) {
+                    if let proj = item.project {
+                        Text(proj)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(projectColor(proj))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(projectColor(proj).opacity(0.1))
+                            .clipShape(Capsule())
+                    }
+
+                    let mins = CalendarService.shared.estimatedMinutes(for: item)
+                    HStack(spacing: 3) {
+                        Image(systemName: "clock")
+                            .font(.system(size: 8))
+                        Text("\(mins)m")
+                    }
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+
+                    if let block = CalendarService.shared.block(for: item.id) {
+                        Text(block.formattedTime)
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+
+            Spacer()
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 20)
-        .padding(.bottom, 10)
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.gray.opacity(0.04))
+        )
     }
+
+    // MARK: - Tasks View
+
+    private var tasksView: some View {
+        ZStack(alignment: .bottom) {
+            Color(NSColor.windowBackgroundColor).ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                // Header
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Tasks")
+                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                        Text("\(activeTasks.count) today, \(waitlistTasks.count) someday")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    // Project filter
+                    Menu {
+                        Button("All Projects") { selectedProject = nil }
+                        Divider()
+                        ForEach(allProjects, id: \.self) { proj in
+                            Button(proj) { selectedProject = proj }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "line.3.horizontal.decrease.circle")
+                            Text(selectedProject ?? "All")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color.gray.opacity(0.1)))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                            isFocusMode.toggle()
+                            if isFocusMode { selectedTab = .focus }
+                        }
+                    }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "timer")
+                                .font(.system(size: 14, weight: .bold))
+                            Text("Focus")
+                                .fontWeight(.semibold)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(Color.blue))
+                        .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 20)
+                .padding(.bottom, 10)
+
+                mainList
+            }
+
+            InputBarView(
+                text: $newTaskTitle,
+                isAnalyzing: isAnalyzing,
+                projects: allProjects,
+                onCommit: analyzeTask
+            )
+            .padding(.bottom, 10)
+        }
+    }
+
+    // MARK: - Focus View
+
+    private var focusView: some View {
+        FocusModeView(
+            tasks: activeTasks,
+            sessionsToday: deepWorkToday,
+            onFinishSession: {
+                DeepWorkStore.incrementToday()
+                deepWorkToday = DeepWorkStore.countToday()
+            }
+        )
+    }
+
+    // MARK: - Schedule View
+
+    private var scheduleView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                Text("Today's Schedule")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .padding(.top, 20)
+
+                CalendarCard(calendar: calendar)
+
+                // Queue
+                if !activeTasks.isEmpty {
+                    QueueCard(pending: Array(activeTasks.prefix(8)))
+                }
+            }
+            .padding(.horizontal, 24)
+        }
+    }
+
+    // MARK: - Task List
 
     private var mainList: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
-                if activeTasks.isEmpty && waitlistTasks.isEmpty && completedTasksByDate.isEmpty {
+                let filteredActive = selectedProject == nil ? activeTasks
+                    : activeTasks.filter { $0.project == selectedProject }
+                let filteredWaitlist = selectedProject == nil ? waitlistTasks
+                    : waitlistTasks.filter { $0.project == selectedProject }
+
+                if filteredActive.isEmpty && filteredWaitlist.isEmpty && completedTasksByDate.isEmpty {
                     EmptyStateView().padding(.top, 40)
                 } else {
 
-                    // ── TODAY ─────────────────────────────────────────
-                    taskSection(label: "Today", badge: activeTasks.count, tasks: activeTasks, isToday: true)
+                    // TODAY
+                    taskSection(label: "Today", badge: filteredActive.count, tasks: filteredActive, isToday: true)
 
-                    // ── SOMEDAY ───────────────────────────────────────
-                    if !waitlistTasks.isEmpty {
-                        taskSection(label: "Someday", badge: waitlistTasks.count, tasks: waitlistTasks, isToday: false)
+                    // SOMEDAY
+                    if !filteredWaitlist.isEmpty {
+                        taskSection(label: "Someday", badge: filteredWaitlist.count, tasks: filteredWaitlist, isToday: false)
                     }
 
-                    // ── COMPLETED ─────────────────────────────────────
-                    if !completedTasksByDate.isEmpty {
+                    // COMPLETED
+                    if selectedProject == nil, !completedTasksByDate.isEmpty {
                         ForEach(completedTasksByDate, id: \.0) { date, tasks in
                             VStack(alignment: .leading, spacing: 12) {
                                 Text(date, format: .dateTime.month().day())
@@ -588,7 +1192,7 @@ struct ContentView: View {
                                     .foregroundStyle(.secondary)
                                     .padding(.horizontal, 24).padding(.top, 16)
                                 ForEach(tasks) { item in
-                                    TaskRowView(item: item, onDelete: {
+                                    TaskRowView(item: item, projects: allProjects, onDelete: {
                                         withAnimation { modelContext.delete(item) }
                                     })
                                     .padding(.horizontal, 20)
@@ -623,13 +1227,13 @@ struct ContentView: View {
                 .padding(.horizontal, 24).padding(.top, 8)
 
                 if tasks.isEmpty && isToday {
-                    Text("No tasks for today — add one below or move one from Someday.")
+                    Text("No tasks for today -- add one below or move one from Someday.")
                         .font(.caption).foregroundStyle(.secondary)
                         .padding(.horizontal, 24)
                 }
 
                 ForEach(tasks) { item in
-                    TaskRowView(item: item, onDelete: {
+                    TaskRowView(item: item, projects: allProjects, onDelete: {
                         withAnimation { modelContext.delete(item) }
                     })
                     .padding(.horizontal, 20)
@@ -647,11 +1251,13 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Task Actions
+
     private func analyzeTask() {
         let raw = newTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return }
 
-        pendingTaskTitle = raw // keep user input as-is for title
+        pendingTaskTitle = raw
         newTaskTitle = ""
         isAnalyzing = true
 
@@ -660,7 +1266,6 @@ struct ContentView: View {
 
             await MainActor.run {
                 if let a = analysis {
-                    // local enforced cleanup and capitalization for English-leading subtasks
                     let cleanedSubs = a.subtasks
                         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                         .filter { !$0.isEmpty }
@@ -728,9 +1333,26 @@ struct ContentView: View {
         }
         showApprovalSheet = false
     }
+
+    // MARK: - Helpers
+
+    func projectColor(_ name: String) -> Color {
+        let colors: [Color] = [.blue, .purple, .orange, .teal, .pink, .green, .indigo, .mint, .cyan, .red]
+        let hash = abs(name.hashValue)
+        return colors[hash % colors.count]
+    }
+
+    private func formatProjectTime(_ minutes: Int) -> String {
+        if minutes >= 60 {
+            let h = minutes / 60
+            let m = minutes % 60
+            return m > 0 ? "\(h)h\(m)m" : "\(h)h"
+        }
+        return "\(minutes)m"
+    }
 }
 
-/// MARK: - 6) SUBVIEWS
+// MARK: - 6) SUBVIEWS
 
 /// Applies drag-and-drop only for Today tasks; Someday tasks are unordered.
 struct DragDropModifier: ViewModifier {
@@ -784,11 +1406,17 @@ struct ActiveTaskDropDelegate: DropDelegate {
     }
 }
 
+// MARK: - Task Approval (with project picker)
+
 struct TaskApprovalView: View {
     let title: String
     let analysis: TaskAnalysis?
+    let projects: [String]
     var onConfirmSingle: () -> Void
     var onConfirmSplit: () -> Void
+
+    @State private var selectedProject: String = ""
+    @State private var newProjectName: String = ""
 
     var body: some View {
         VStack(spacing: 18) {
@@ -818,6 +1446,46 @@ struct TaskApprovalView: View {
             }
             .padding(.horizontal)
 
+            // Project picker
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Project")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 8) {
+                    Menu {
+                        Button("None") { selectedProject = "" }
+                        Divider()
+                        ForEach(projects, id: \.self) { proj in
+                            Button(proj) { selectedProject = proj }
+                        }
+                        Divider()
+                        Button("New Project...") { selectedProject = "__new__" }
+                    } label: {
+                        HStack {
+                            Text(selectedProject.isEmpty ? "No project" : (selectedProject == "__new__" ? "New..." : selectedProject))
+                                .font(.callout)
+                            Spacer()
+                            Image(systemName: "chevron.down")
+                                .font(.caption)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.08)))
+                    }
+                    .buttonStyle(.plain)
+
+                    if selectedProject == "__new__" {
+                        TextField("Project name", text: $newProjectName)
+                            .textFieldStyle(.plain)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.08)))
+                    }
+                }
+            }
+            .padding(.horizontal)
+
             if let analysis, !analysis.subtasks.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
@@ -834,8 +1502,6 @@ struct TaskApprovalView: View {
                                 Image(systemName: "circle.dashed")
                                     .foregroundStyle(.secondary)
                                     .font(.callout)
-
-                                // Bigger font for subtasks
                                 Text(sub)
                                     .font(.callout)
                                     .foregroundStyle(.primary)
@@ -852,7 +1518,6 @@ struct TaskApprovalView: View {
                 .padding(.horizontal)
 
                 HStack(spacing: 12) {
-                    // Keep One: visible outline
                     Button(action: onConfirmSingle) {
                         Text("Keep One")
                             .font(.callout)
@@ -906,90 +1571,7 @@ struct TaskApprovalView: View {
     }
 }
 
-struct SidebarView: View {
-    let activeCount: Int
-    let allItems: [TodoItem]
-    let deepWorkCountToday: Int
-    @ObservedObject var calendar: CalendarService
-
-    private var completionRate: Double {
-        let total = Double(allItems.count)
-        guard total > 0 else { return 0 }
-        let completed = Double(allItems.filter { $0.isCompleted }.count)
-        return completed / total
-    }
-
-    private var pending: [TodoItem] {
-        allItems.filter { !$0.isCompleted && $0.isToday }
-    }
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                // Overview
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Overview")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-
-                    HStack(alignment: .center) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("\(activeCount)")
-                                .font(.system(size: 48, weight: .bold, design: .rounded))
-
-                            Text("Pending Tasks")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            Text("Deep Work Today: \(deepWorkCountToday)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-
-                        CircularProgressView(progress: completionRate)
-                            .frame(width: 92, height: 92)
-                    }
-                }
-                .padding(20)
-                .background(
-                    RoundedRectangle(cornerRadius: 20)
-                        .fill(Color.gray.opacity(0.05))
-                        .shadow(color: .black.opacity(0.05), radius: 10, x: 0, y: 5)
-                )
-
-                // Calendar / Free time card
-                CalendarCard(calendar: calendar)
-
-                // Queue / Celebration
-                if pending.isEmpty {
-                    CelebrationCard()
-                } else {
-                    QueueCard(pending: Array(pending.prefix(4)))
-                }
-
-                // Momentum
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Momentum")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 4)
-
-                    HeatmapView(items: allItems)
-                        .padding(12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 20)
-                                .fill(Color.gray.opacity(0.05))
-                        )
-                }
-            }
-            .padding()
-        }
-    }
-}
-
-// MARK: - Calendar Card (sidebar)
+// MARK: - Sidebar Cards
 
 struct CalendarCard: View {
     @ObservedObject var calendar: CalendarService
@@ -1016,7 +1598,6 @@ struct CalendarCard: View {
             if !calendar.isAuthorized {
                 VStack(spacing: 8) {
                     if calendar.isDenied {
-                        // Already denied — macOS won't show the dialog again
                         Text("Calendar access was denied. Enable it in System Settings to see your schedule.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -1030,7 +1611,6 @@ struct CalendarCard: View {
                         .font(.caption)
                         .foregroundStyle(.blue)
                     } else {
-                        // Not asked yet
                         Text("Grant calendar access to see free time blocks.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -1045,11 +1625,10 @@ struct CalendarCard: View {
                 }
                 .frame(maxWidth: .infinity)
             } else if calendar.todayFreeSlots.isEmpty && calendar.busyEvents.isEmpty {
-                Text("No events today — your day is wide open.")
+                Text("No events today -- your day is wide open.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                // Free time summary
                 if calendar.totalFreeMinutesToday > 0 {
                     HStack(spacing: 6) {
                         Image(systemName: "clock.fill")
@@ -1062,7 +1641,6 @@ struct CalendarCard: View {
                     }
                 }
 
-                // Scheduled task blocks
                 if !calendar.scheduledBlocks.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("SUGGESTED BLOCKS")
@@ -1093,7 +1671,6 @@ struct CalendarCard: View {
                     }
                 }
 
-                // Busy events
                 if !calendar.busyEvents.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("BUSY")
@@ -1125,7 +1702,8 @@ struct CalendarCard: View {
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color.gray.opacity(0.05))
+                .fill(Color(NSColor.controlBackgroundColor))
+                .shadow(color: .black.opacity(0.04), radius: 8, y: 4)
         )
     }
 }
@@ -1135,12 +1713,10 @@ struct QueueCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-
             HStack(alignment: .firstTextBaseline) {
-                Text("Next")
+                Text("Up Next")
                     .font(.headline)
                     .foregroundStyle(.secondary)
-
                 Spacer()
             }
 
@@ -1157,7 +1733,8 @@ struct QueueCard: View {
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color.gray.opacity(0.05))
+                .fill(Color(NSColor.controlBackgroundColor))
+                .shadow(color: .black.opacity(0.04), radius: 8, y: 4)
         )
     }
 }
@@ -1180,16 +1757,23 @@ struct QueueItemRow: View {
                 }
             } else {
                 let inv = involvement(for: item.difficultyScore)
-
                 Circle()
                     .fill(involvementColor(inv).opacity(0.9))
                     .frame(width: 10, height: 10)
             }
 
-            Text(item.title)
-                .font(isCurrent ? .title3.weight(.semibold) : .body)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                    .font(isCurrent ? .title3.weight(.semibold) : .body)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let proj = item.project {
+                    Text(proj)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             Spacer()
 
@@ -1212,33 +1796,8 @@ struct QueueItemRow: View {
         .shadow(color: isCurrent ? Color.blue.opacity(0.05) : .clear,
                 radius: isCurrent ? 10 : 0, x: 0, y: 6)
     }
-
-    private func difficultyColor(_ score: Int) -> Color {
-        switch score {
-        case 4...5: return .red
-        case 3: return .orange
-        default: return .blue
-        }
-    }
 }
 
-
-struct PulsingDot: View {
-    let isOn: Bool
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(Color.blue.opacity(isOn ? 0.18 : 0.10))
-                .frame(width: isOn ? 18 : 14, height: isOn ? 18 : 14)
-
-            Circle()
-                .fill(Color.blue)
-                .frame(width: 10, height: 10)
-        }
-        .animation(.easeInOut(duration: 1.1), value: isOn)
-    }
-}
 
 struct InvolvementPickerPill: View {
     @Bindable var item: TodoItem
@@ -1337,11 +1896,15 @@ struct InvolvementPickerPill: View {
 
 struct TaskRowView: View {
     @Bindable var item: TodoItem
+    let projects: [String]
     var onDelete: () -> Void
 
     @State private var isEditingTitle = false
     @State private var draftTitle = ""
+    @State private var isEditingProject = false
+    @State private var draftProject = ""
     @FocusState private var titleFocused: Bool
+    @FocusState private var projectFocused: Bool
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
@@ -1402,14 +1965,44 @@ struct TaskRowView: View {
                     HStack(spacing: 8) {
                         InvolvementPickerPill(item: item)
                         .buttonStyle(.plain)
+
                         if item.isComplex {
                             Badge(text: "Complex", color: .purple)
                         }
+
+                        // Project badge (click to change/rename)
+                        if let proj = item.project, !proj.isEmpty {
+                            projectBadge(proj)
+                        }
+
+                        // Project picker (when no project assigned)
+                        if item.project == nil || item.project?.isEmpty == true {
+                            Button {
+                                draftProject = ""
+                                isEditingProject = true
+                            } label: {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "folder.badge.plus")
+                                        .font(.system(size: 9))
+                                    Text("Project")
+                                        .font(.system(size: 10, weight: .medium))
+                                }
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(Capsule().fill(Color.gray.opacity(0.08)))
+                            }
+                            .buttonStyle(.plain)
+                            .popover(isPresented: $isEditingProject) {
+                                projectPickerPopover
+                            }
+                        }
+
                         if let start = item.scheduledStart, let end = item.scheduledEnd {
                             HStack(spacing: 3) {
                                 Image(systemName: "clock")
                                     .font(.system(size: 9, weight: .medium))
-                                Text("\(start, style: .time) – \(end, style: .time)")
+                                Text("\(start, style: .time) - \(end, style: .time)")
                                     .font(.system(size: 10, weight: .medium))
                             }
                             .foregroundStyle(.secondary)
@@ -1417,6 +2010,7 @@ struct TaskRowView: View {
                             .padding(.vertical, 5)
                             .background(Capsule().fill(Color.gray.opacity(0.08)))
                         }
+
                         // Today / Someday toggle
                         Button {
                             withAnimation(.snappy) { item.isToday.toggle() }
@@ -1451,6 +2045,128 @@ struct TaskRowView: View {
         )
     }
 
+    @ViewBuilder
+    private func projectBadge(_ name: String) -> some View {
+        let color = projectColorFor(name)
+        Button {
+            draftProject = name
+            isEditingProject = true
+        } label: {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 6, height: 6)
+                Text(name)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(color)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(color.opacity(0.1)))
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isEditingProject) {
+            projectPickerPopover
+        }
+    }
+
+    private var projectPickerPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Assign Project")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            // Existing projects
+            if !projects.isEmpty {
+                VStack(spacing: 4) {
+                    ForEach(projects, id: \.self) { proj in
+                        Button {
+                            item.project = proj
+                            isEditingProject = false
+                        } label: {
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(projectColorFor(proj))
+                                    .frame(width: 8, height: 8)
+                                Text(proj)
+                                    .font(.callout)
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                if item.project == proj {
+                                    Image(systemName: "checkmark")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(.blue)
+                                }
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(item.project == proj ? Color.blue.opacity(0.08) : Color.clear)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                Divider()
+            }
+
+            // New / rename project
+            HStack(spacing: 8) {
+                TextField("New project name...", text: $draftProject)
+                    .textFieldStyle(.plain)
+                    .font(.callout)
+                    .focused($projectFocused)
+                    .onSubmit {
+                        let name = draftProject.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !name.isEmpty { item.project = name }
+                        isEditingProject = false
+                    }
+
+                Button {
+                    let name = draftProject.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !name.isEmpty { item.project = name }
+                    isEditingProject = false
+                } label: {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.blue)
+                }
+                .buttonStyle(.plain)
+                .disabled(draftProject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.06)))
+
+            if item.project != nil {
+                Button {
+                    item.project = nil
+                    isEditingProject = false
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "xmark.circle")
+                            .font(.caption)
+                        Text("Remove project")
+                            .font(.caption)
+                    }
+                    .foregroundStyle(.red.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+            }
+        }
+        .padding(12)
+        .frame(width: 220)
+        .onAppear { projectFocused = true }
+    }
+
+    private func projectColorFor(_ name: String) -> Color {
+        let colors: [Color] = [.blue, .purple, .orange, .teal, .pink, .green, .indigo, .mint, .cyan, .red]
+        let hash = abs(name.hashValue)
+        return colors[hash % colors.count]
+    }
+
     private func toggleCompleted() {
         withAnimation(.snappy) {
             item.isCompleted.toggle()
@@ -1468,14 +2184,6 @@ struct TaskRowView: View {
             item.title = t.capitalizingFirstLetterIfEnglish()
         }
         withAnimation(.snappy) { isEditingTitle = false }
-    }
-
-    private func difficultyColor(_ score: Int) -> Color {
-        switch score {
-        case 4...5: return .red
-        case 3: return .orange
-        default: return .blue
-        }
     }
 }
 
@@ -1498,6 +2206,7 @@ struct Badge: View {
 struct InputBarView: View {
     @Binding var text: String
     var isAnalyzing: Bool
+    var projects: [String]
     var onCommit: () -> Void
 
     var body: some View {
@@ -1507,7 +2216,7 @@ struct InputBarView: View {
                 .submitLabel(.done)
                 .onSubmit(onCommit)
             #if os(macOS)
-                .textFieldStyle(.plain) // removes default gray box styling
+                .textFieldStyle(.plain)
                 .modifier(DisableFocusRingIfAvailable())
             #endif
                 .padding(.horizontal, 8)
@@ -1544,134 +2253,300 @@ struct FocusModeView: View {
     @State private var didFinishThisRun = false
 
     var currentTask: TodoItem? { tasks.first }
+    var upNext: [TodoItem] { Array(tasks.dropFirst().prefix(4)) }
 
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
-    var body: some View {
-        GeometryReader { geo in
-            let ringSize = min(340, min(geo.size.width * 0.78, geo.size.height * 0.50))
-            let topPad: CGFloat = 10
-            let sectionGap: CGFloat = 22
+    private var progress: Double {
+        1.0 - Double(timeLeft) / Double(25 * 60)
+    }
 
-            VStack(spacing: sectionGap) {
-
-                // Timer
-                ZStack {
-                    Circle()
-                        .stroke(lineWidth: 4)
-                        .opacity(0.10)
-                        .foregroundColor(.gray)
-                        .frame(width: ringSize, height: ringSize)
-
-                    Circle()
-                        .trim(from: 0.0, to: CGFloat(timeLeft) / CGFloat(25 * 60))
-                        .stroke(
-                            Color.blue,
-                            style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round)
-                        )
-                        .rotationEffect(.degrees(270))
-                        .animation(.linear(duration: 1), value: timeLeft)
-                        .frame(width: ringSize, height: ringSize)
-
-                    VStack(spacing: 8) {
-                        Text(formatTime(timeLeft))
-                            .font(.system(size: ringSize * 0.28, weight: .light, design: .rounded))
-                            .contentTransition(.numericText())
-
-                        Text(isRunning ? "FOCUSING" : "READY")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .tracking(4)
-                            .foregroundStyle(isRunning ? Color.blue : Color.secondary)
-
-                        // Sessions pill
-                        HStack(spacing: 8) {
-                            Image(systemName: "flame.fill")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(Color.orange)
-
-                            Text("Sessions")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundStyle(.secondary)
-
-                            Text("\(sessionsToday)")
-                                .font(.system(size: 20, weight: .bold, design: .rounded))
-                                .foregroundStyle(.primary)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Capsule().fill(Color.gray.opacity(0.07)))
-                        .padding(.top, 2)
-                    }
-                }
-                .padding(.top, topPad)
-
-                // Task
-                VStack(spacing: 10) {
-                    Text("CURRENT TASK")
-                        .font(.caption)
-                        .fontWeight(.bold)
-                        .foregroundStyle(.secondary)
-                        .tracking(2)
-
-                    Text(currentTask?.title ?? "No tasks pending!")
-                        .font(.system(size: 30, weight: .bold, design: .rounded))
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                        .padding(.horizontal, 18)
-                }
-                .padding(.top, 6)
-
-                // Controls
-                HStack(alignment: .center, spacing: 44) {
-                    Button(action: {
-                        withAnimation(.snappy) {
-                            isRunning = false
-                            timeLeft = 25 * 60
-                            didFinishThisRun = false
-                            MenuBarState.shared.focusTimeLeft = 25 * 60
-                            MenuBarState.shared.focusIsRunning = false
-                        }
-                    }) {
-                        VStack(spacing: 8) {
-                            Image(systemName: "arrow.counterclockwise")
-                                .font(.system(size: 22))
-                                .foregroundStyle(.secondary)
-                            Text("Reset")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(width: 70)
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(action: {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                            if !isRunning { didFinishThisRun = false }
-                            isRunning.toggle()
-                            MenuBarState.shared.focusIsRunning = isRunning
-                        }
-                    }) {
-                        Image(systemName: isRunning ? "pause.fill" : "play.fill")
-                            .font(.system(size: 28, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 82, height: 82)
-                            .background(Circle().fill(Color.blue))
-                            .shadow(color: .blue.opacity(0.18), radius: 14, x: 0, y: 10)
-                    }
-                    .buttonStyle(.plain)
-
-                    Color.clear.frame(width: 70, height: 1)
-                }
-                .padding(.top, 6)
-
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(.horizontal, 28)
+    private var accentGradient: LinearGradient {
+        if isRunning {
+            return LinearGradient(
+                colors: [Color(red: 0.25, green: 0.35, blue: 0.95), Color(red: 0.45, green: 0.25, blue: 0.90)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+        } else {
+            return LinearGradient(
+                colors: [Color(red: 0.3, green: 0.3, blue: 0.35), Color(red: 0.2, green: 0.2, blue: 0.25)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
         }
-        .background(Color(NSColor.windowBackgroundColor))
+    }
+
+    private func projectColor(_ name: String) -> Color {
+        let colors: [Color] = [.blue, .purple, .orange, .teal, .pink, .green, .indigo, .mint, .cyan, .red]
+        return colors[abs(name.hashValue) % colors.count]
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Main focus area
+            GeometryReader { geo in
+                let ringSize: CGFloat = min(260, min(geo.size.width * 0.45, geo.size.height * 0.42))
+
+                VStack(spacing: 0) {
+                    Spacer(minLength: 20)
+
+                    // Timer ring
+                    ZStack {
+                        // Track
+                        Circle()
+                            .stroke(Color.white.opacity(0.08), lineWidth: 6)
+                            .frame(width: ringSize, height: ringSize)
+
+                        // Progress arc
+                        Circle()
+                            .trim(from: 0, to: CGFloat(progress))
+                            .stroke(
+                                AngularGradient(
+                                    colors: [.cyan, .blue, .purple, .blue],
+                                    center: .center
+                                ),
+                                style: StrokeStyle(lineWidth: 6, lineCap: .round)
+                            )
+                            .rotationEffect(.degrees(-90))
+                            .animation(.linear(duration: 1), value: timeLeft)
+                            .frame(width: ringSize, height: ringSize)
+
+                        // Glow behind progress tip
+                        if isRunning {
+                            Circle()
+                                .trim(from: max(0, CGFloat(progress) - 0.02), to: CGFloat(progress))
+                                .stroke(Color.cyan.opacity(0.6), lineWidth: 10)
+                                .blur(radius: 8)
+                                .rotationEffect(.degrees(-90))
+                                .frame(width: ringSize, height: ringSize)
+                        }
+
+                        // Center content
+                        VStack(spacing: 6) {
+                            Text(formatTime(timeLeft))
+                                .font(.system(size: ringSize * 0.26, weight: .thin, design: .rounded))
+                                .foregroundStyle(.white)
+                                .contentTransition(.numericText())
+                                .monospacedDigit()
+
+                            Text(isRunning ? "FOCUSING" : (didFinishThisRun ? "DONE" : "READY"))
+                                .font(.system(size: 11, weight: .bold))
+                                .tracking(3)
+                                .foregroundStyle(isRunning ? .cyan : .white.opacity(0.5))
+                        }
+                    }
+
+                    Spacer().frame(height: 28)
+
+                    // Task info
+                    VStack(spacing: 8) {
+                        Text(currentTask?.title ?? "No tasks pending!")
+                            .font(.system(size: 24, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                            .padding(.horizontal, 20)
+
+                        if let proj = currentTask?.project {
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(projectColor(proj))
+                                    .frame(width: 6, height: 6)
+                                Text(proj)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.6))
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(.white.opacity(0.08)))
+                        }
+                    }
+
+                    Spacer().frame(height: 32)
+
+                    // Controls
+                    HStack(spacing: 32) {
+                        // Reset
+                        Button {
+                            withAnimation(.snappy) {
+                                isRunning = false
+                                timeLeft = 25 * 60
+                                didFinishThisRun = false
+                                MenuBarState.shared.focusTimeLeft = 25 * 60
+                                MenuBarState.shared.focusIsRunning = false
+                            }
+                        } label: {
+                            Image(systemName: "arrow.counterclockwise")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.5))
+                                .frame(width: 48, height: 48)
+                                .background(Circle().fill(.white.opacity(0.08)))
+                        }
+                        .buttonStyle(.plain)
+
+                        // Play/Pause — larger
+                        Button {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                if !isRunning { didFinishThisRun = false }
+                                isRunning.toggle()
+                                MenuBarState.shared.focusIsRunning = isRunning
+                            }
+                        } label: {
+                            ZStack {
+                                Circle()
+                                    .fill(.white)
+                                    .frame(width: 68, height: 68)
+                                    .shadow(color: .white.opacity(0.15), radius: 20, y: 4)
+
+                                Image(systemName: isRunning ? "pause.fill" : "play.fill")
+                                    .font(.system(size: 24, weight: .bold))
+                                    .foregroundStyle(
+                                        isRunning
+                                            ? Color(red: 0.3, green: 0.3, blue: 0.95)
+                                            : Color(red: 0.2, green: 0.2, blue: 0.3)
+                                    )
+                                    .offset(x: isRunning ? 0 : 2) // optical center for play
+                            }
+                        }
+                        .buttonStyle(.plain)
+
+                        // Skip
+                        Button {
+                            // Complete current task and move to next
+                            if let task = currentTask {
+                                withAnimation(.snappy) {
+                                    task.isCompleted = true
+                                    task.completedAt = Date()
+                                    isRunning = false
+                                    timeLeft = 25 * 60
+                                    didFinishThisRun = false
+                                    MenuBarState.shared.focusTimeLeft = 25 * 60
+                                    MenuBarState.shared.focusIsRunning = false
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.5))
+                                .frame(width: 48, height: 48)
+                                .background(Circle().fill(.white.opacity(0.08)))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Complete task")
+                    }
+
+                    Spacer(minLength: 20)
+                }
+                .frame(maxWidth: .infinity)
+            }
+
+            // Right panel — session info + queue
+            VStack(alignment: .leading, spacing: 0) {
+                // Sessions header
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "flame.fill")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.orange)
+                        Text("Today's Sessions")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text("\(sessionsToday)")
+                            .font(.system(size: 42, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                        Text("sessions")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.white.opacity(0.4))
+                    }
+
+                    // Time spent today estimate
+                    let minutesSpent = sessionsToday * 25
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock")
+                            .font(.system(size: 10))
+                        Text(minutesSpent >= 60
+                             ? "\(minutesSpent / 60)h \(minutesSpent % 60)m focused"
+                             : "\(minutesSpent)m focused")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundStyle(.white.opacity(0.35))
+                }
+                .padding(24)
+
+                Divider().overlay(Color.white.opacity(0.06))
+
+                // Up next queue
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("UP NEXT")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.35))
+                        .tracking(1.5)
+
+                    if upNext.isEmpty {
+                        Text("This is your last task!")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.3))
+                            .padding(.top, 4)
+                    } else {
+                        ForEach(upNext) { task in
+                            HStack(spacing: 10) {
+                                let inv = involvement(for: task.difficultyScore)
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(involvementColor(inv).opacity(0.6))
+                                    .frame(width: 3, height: 24)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(task.title)
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(.white.opacity(0.8))
+                                        .lineLimit(1)
+
+                                    HStack(spacing: 6) {
+                                        if let proj = task.project {
+                                            Text(proj)
+                                                .font(.system(size: 9))
+                                                .foregroundStyle(projectColor(proj).opacity(0.8))
+                                        }
+                                        let mins = CalendarService.shared.estimatedMinutes(for: task)
+                                        Text("\(mins)m")
+                                            .font(.system(size: 9))
+                                            .foregroundStyle(.white.opacity(0.3))
+                                    }
+                                }
+
+                                Spacer()
+                            }
+                        }
+                    }
+                }
+                .padding(24)
+
+                Spacer()
+
+                // Keyboard hints
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        keyHint("Space")
+                        Text("Play / Pause")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.25))
+                    }
+                    HStack(spacing: 6) {
+                        keyHint("R")
+                        Text("Reset timer")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.25))
+                    }
+                }
+                .padding(24)
+            }
+            .frame(width: 240)
+            .background(Color.white.opacity(0.03))
+        }
+        .background(accentGradient)
+        .animation(.easeInOut(duration: 0.8), value: isRunning)
         .onAppear {
             MenuBarState.shared.isFocusMode = true
             MenuBarState.shared.focusTimeLeft = timeLeft
@@ -1690,7 +2565,6 @@ struct FocusModeView: View {
             MenuBarState.shared.focusTimeLeft = timeLeft
             MenuBarState.shared.focusIsRunning = isRunning
 
-            // Session just finished
             if timeLeft == 0, !didFinishThisRun {
                 didFinishThisRun = true
                 isRunning = false
@@ -1704,6 +2578,15 @@ struct FocusModeView: View {
         let minutes = totalSeconds / 60
         let seconds = totalSeconds % 60
         return String(format: "%02d:%02d", minutes, seconds)
+    }
+
+    private func keyHint(_ key: String) -> some View {
+        Text(key)
+            .font(.system(size: 9, weight: .medium, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.3))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(RoundedRectangle(cornerRadius: 4).stroke(.white.opacity(0.1)))
     }
 }
 
@@ -1834,12 +2717,222 @@ struct CircularProgressView: View {
     }
 }
 
+// MARK: - Project Time Distribution Chart
+
+struct ProjectTimeChart: View {
+    let items: [TodoItem]
+    let projects: [String]
+    let projectColor: (String) -> Color
+
+    private let days = 14
+
+    /// Compute completed minutes per project per day for the last 14 days.
+    private var chartData: [(day: Int, project: String, minutes: Int)] {
+        var result: [(Int, String, Int)] = []
+        let cal = Calendar.current
+
+        for dayOffset in 0..<days {
+            let date = cal.date(byAdding: .day, value: -dayOffset, to: Date())!
+
+            for proj in projects {
+                let mins = items.filter { item in
+                    guard item.isCompleted,
+                          let completedAt = item.completedAt,
+                          item.project == proj,
+                          cal.isDate(completedAt, inSameDayAs: date) else { return false }
+                    return true
+                }.map { CalendarService.shared.estimatedMinutes(for: $0) }.reduce(0, +)
+
+                result.append((dayOffset, proj, mins))
+            }
+
+            // "No project" bucket
+            let noProj = items.filter { item in
+                guard item.isCompleted,
+                      let completedAt = item.completedAt,
+                      (item.project == nil || item.project?.isEmpty == true),
+                      cal.isDate(completedAt, inSameDayAs: date) else { return false }
+                return true
+            }.map { CalendarService.shared.estimatedMinutes(for: $0) }.reduce(0, +)
+
+            if noProj > 0 {
+                result.append((dayOffset, "_none", noProj))
+            }
+        }
+        return result
+    }
+
+    /// Max daily total across all projects (for scaling).
+    private var maxDailyTotal: Int {
+        var totals = [Int: Int]()
+        for d in chartData {
+            totals[d.day, default: 0] += d.minutes
+        }
+        return max(totals.values.max() ?? 1, 1)
+    }
+
+    private var allProjectKeys: [String] {
+        var keys = projects
+        if chartData.contains(where: { $0.project == "_none" }) {
+            keys.append("_none")
+        }
+        return keys
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            // Chart area
+            GeometryReader { geo in
+                let w = geo.size.width
+                let h = geo.size.height
+                let maxVal = Double(maxDailyTotal)
+
+                ZStack(alignment: .bottomLeading) {
+                    // Grid lines
+                    ForEach(0..<4, id: \.self) { i in
+                        let yFrac: Double = Double(i) / 3.0
+                        Path { p in
+                            let y = h * (1.0 - yFrac)
+                            p.move(to: CGPoint(x: 0, y: y))
+                            p.addLine(to: CGPoint(x: w, y: y))
+                        }
+                        .stroke(Color.gray.opacity(0.1), lineWidth: 0.5)
+                    }
+
+                    // Stacked area for each project
+                    ForEach(Array(allProjectKeys.enumerated()), id: \.element) { projIdx, proj in
+                        let color = proj == "_none" ? Color.gray : projectColor(proj)
+
+                        Path { path in
+                            // Build cumulative stack
+                            var bottomPoints = [CGPoint]()
+                            var topPoints = [CGPoint]()
+
+                            for dayOffset in stride(from: days - 1, through: 0, by: -1) {
+                                let xIdx: Double = Double(days - 1 - dayOffset)
+                                let x: Double = w * xIdx / Double(max(days - 1, 1))
+
+                                // Sum of projects below this one
+                                var below: Double = 0
+                                for belowIdx in 0..<projIdx {
+                                    let belowProj = allProjectKeys[belowIdx]
+                                    let mins = chartData.first(where: { $0.day == dayOffset && $0.project == belowProj })?.minutes ?? 0
+                                    below += Double(mins)
+                                }
+
+                                let current = Double(chartData.first(where: { $0.day == dayOffset && $0.project == proj })?.minutes ?? 0)
+
+                                let bottomY: Double = h * (1.0 - below / maxVal)
+                                let topY: Double = h * (1.0 - (below + current) / maxVal)
+
+                                bottomPoints.append(CGPoint(x: x, y: bottomY))
+                                topPoints.append(CGPoint(x: x, y: topY))
+                            }
+
+                            guard !topPoints.isEmpty else { return }
+
+                            // Draw area: top line forward, bottom line backward
+                            path.move(to: topPoints[0])
+                            for pt in topPoints.dropFirst() {
+                                path.addLine(to: pt)
+                            }
+                            for pt in bottomPoints.reversed() {
+                                path.addLine(to: pt)
+                            }
+                            path.closeSubpath()
+                        }
+                        .fill(
+                            (proj == "_none" ? Color.gray : projectColor(proj)).opacity(0.35)
+                        )
+
+                        // Line on top
+                        Path { path in
+                            var topPoints = [CGPoint]()
+                            for dayOffset in stride(from: days - 1, through: 0, by: -1) {
+                                let xIdx: Double = Double(days - 1 - dayOffset)
+                                let x: Double = w * xIdx / Double(max(days - 1, 1))
+                                var below: Double = 0
+                                for belowIdx in 0..<projIdx {
+                                    let belowProj = allProjectKeys[belowIdx]
+                                    let mins = chartData.first(where: { $0.day == dayOffset && $0.project == belowProj })?.minutes ?? 0
+                                    below += Double(mins)
+                                }
+                                let current = Double(chartData.first(where: { $0.day == dayOffset && $0.project == proj })?.minutes ?? 0)
+                                let y: Double = h * (1.0 - (below + current) / maxVal)
+                                topPoints.append(CGPoint(x: x, y: y))
+                            }
+                            guard !topPoints.isEmpty else { return }
+                            path.move(to: topPoints[0])
+                            for pt in topPoints.dropFirst() {
+                                path.addLine(to: pt)
+                            }
+                        }
+                        .stroke(
+                            (proj == "_none" ? Color.gray : projectColor(proj)).opacity(0.7),
+                            lineWidth: 1.5
+                        )
+                    }
+
+                    // X-axis labels
+                    HStack {
+                        Text("\(days)d ago")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.tertiary)
+                        Spacer()
+                        Text("Today")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .offset(y: 12)
+                }
+            }
+            .frame(height: 90)
+
+            // Legend
+            let legendItems = allProjectKeys
+            if !legendItems.isEmpty {
+                HStack(spacing: 12) {
+                    ForEach(legendItems, id: \.self) { proj in
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(proj == "_none" ? Color.gray : projectColor(proj))
+                                .frame(width: 6, height: 6)
+                            Text(proj == "_none" ? "Other" : proj)
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+
+            // Summary
+            if !projects.isEmpty {
+                let totalActive = items.filter { !$0.isCompleted }.map { CalendarService.shared.estimatedMinutes(for: $0) }.reduce(0, +)
+                HStack(spacing: 4) {
+                    Text("Total remaining:")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                    Text(formatMins(totalActive))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func formatMins(_ m: Int) -> String {
+        if m >= 60 { return "\(m / 60)h \(m % 60)m" }
+        return "\(m)m"
+    }
+}
+
 struct HeatmapView: View {
     let items: [TodoItem]
 
     private let cols = 7
     private let totalDays = 28
-    private let spacing: CGFloat = 8
+    private let spacing: CGFloat = 5
 
     @State private var hoveredIndex: Int? = nil
 
@@ -1857,8 +2950,11 @@ struct HeatmapView: View {
 
     private func opacity(for dayOffset: Int) -> Double {
         let count = completedCount(for: dayOffset)
-        if count == 0 { return 0.12 }
-        return min(0.25 + Double(count) * 0.18, 1.0)
+        if count == 0 { return 0.08 }
+        if count == 1 { return 0.30 }
+        if count == 2 { return 0.50 }
+        if count == 3 { return 0.70 }
+        return min(0.80 + Double(count - 4) * 0.05, 1.0)
     }
 
     private func tooltipPosition(
@@ -1871,14 +2967,12 @@ struct HeatmapView: View {
         let col = index % cols
 
         let x = CGFloat(col) * (cell + spacing) + cell / 2
-        var y = CGFloat(row) * (cell + spacing) - 14   // above the cell
+        var y = CGFloat(row) * (cell + spacing) - 14
 
-        // If tooltip would go above the grid, place it below the cell.
         if y < 8 {
             y = CGFloat(row) * (cell + spacing) + cell + 18
         }
 
-        // Clamp inside grid bounds (so it doesn't look cut off at edges)
         let clampedX = min(max(x, 60), gridWidth - 60)
         let clampedY = min(max(y, 10), gridHeight - 10)
 
@@ -1887,9 +2981,8 @@ struct HeatmapView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // Compute square size to fill width nicely.
             let raw = (geo.size.width - CGFloat(cols - 1) * spacing) / CGFloat(cols)
-            let cell = min(26, max(16, floor(raw))) // feel free to tweak cap 26/16
+            let cell = min(26, max(16, floor(raw)))
 
             let rows = Int(ceil(Double(totalDays) / Double(cols)))
             let gridWidth = cell * CGFloat(cols) + spacing * CGFloat(cols - 1)
@@ -1905,7 +2998,7 @@ struct HeatmapView: View {
                         let dayOffset = (totalDays - 1) - i
                         let count = completedCount(for: dayOffset)
 
-                        let radius = max(4, cell * 0.22)   // tweak 0.22 for more/less rounding
+                        let radius = max(4, cell * 0.22)
 
                         RoundedRectangle(cornerRadius: radius, style: .continuous)
                             .fill(Color.blue.opacity(opacity(for: dayOffset)))
@@ -1938,15 +3031,15 @@ struct HeatmapView: View {
                         .padding(.vertical, 7)
                         .background(Color.black.opacity(0.78))
                         .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .allowsHitTesting(false) // critical: prevents hover flicker
+                        .allowsHitTesting(false)
                         .position(tooltipPosition(index: i, cell: cell, gridWidth: gridWidth, gridHeight: gridHeight))
                         .transition(.opacity)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading) // fills the card, grid stays aligned
-            .frame(height: gridHeight) // keeps layout stable
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: gridHeight)
         }
-        .frame(height: 26 * 4 + spacing * 3) // approximate height to avoid GeometryReader collapsing
+        .frame(height: 24 * 4 + spacing * 3)
     }
 }
 
@@ -2025,8 +3118,6 @@ private struct SeededPreviewHost: View {
             .task {
                 guard !seeded else { return }
                 seeded = true
-
-                // avoid double seeding if Preview refreshes oddly
                 guard items.isEmpty else { return }
                 seed()
             }
@@ -2041,11 +3132,10 @@ private struct SeededPreviewHost: View {
             return cal.startOfDay(for: d)
         }
 
-        // Active tasks
-        let active: [(String, Int)] = [
-            ("Write proposal", 4),
-            ("Refactor UI Code", 3),
-            ("Buy groceries", 2)
+        let active: [(String, Int, String?)] = [
+            ("Write proposal", 4, "Research"),
+            ("Refactor UI Code", 3, "Done App"),
+            ("Buy groceries", 2, nil)
         ]
 
         for (idx, a) in active.enumerated() {
@@ -2053,21 +3143,14 @@ private struct SeededPreviewHost: View {
                 title: a.0,
                 difficultyScore: a.1,
                 priority: 1,
-                sortOrder: idx
+                sortOrder: idx,
+                project: a.2
             )
             modelContext.insert(item)
         }
 
-        // Completed tasks: (daysAgo, count)
         let completedPlan: [(Int, Int)] = [
-            (0, 3),
-            (1, 1),
-            (2, 2),
-            (4, 5),
-            (7, 1),
-            (10, 3),
-            (14, 2),
-            (21, 4)
+            (0, 3), (1, 1), (2, 2), (4, 5), (7, 1), (10, 3), (14, 2), (21, 4)
         ]
 
         for (daysAgo, count) in completedPlan {
@@ -2080,10 +3163,8 @@ private struct SeededPreviewHost: View {
                     sortOrder: nil
                 )
                 item.isCompleted = true
-
                 let base = dayStart(daysAgo: daysAgo)
                 item.completedAt = cal.date(byAdding: .hour, value: 9 + (i % 10), to: base)
-
                 modelContext.insert(item)
             }
         }

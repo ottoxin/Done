@@ -28,6 +28,7 @@ struct ExportedTask: Codable {
     var estimatedMinutes: Int?
     var scheduledStart: Date?
     var scheduledEnd: Date?
+    var project: String?
 }
 
 struct AppState: Codable {
@@ -41,7 +42,7 @@ struct AppState: Codable {
 
 struct TaskUpdate: Codable, Equatable {
     enum UpdateType: String, Codable {
-        case add, complete, uncomplete, delete, reorder, reschedule, setDifficulty
+        case add, complete, uncomplete, delete, reorder, reschedule, setDifficulty, setProject
     }
     var type: UpdateType
     var title: String                // used to match existing tasks
@@ -51,6 +52,7 @@ struct TaskUpdate: Codable, Equatable {
     var scheduledStart: String?      // ISO8601, for reschedule
     var scheduledEnd: String?        // ISO8601, for reschedule
     var isComplex: Bool?             // for add
+    var project: String?             // for add / setProject
 }
 
 struct UpdatesFile: Codable, Equatable {
@@ -90,7 +92,8 @@ final class SharedStateService: ObservableObject {
                 sortOrder: item.sortOrder ?? 999,
                 estimatedMinutes: item.estimatedMinutes ?? CalendarService.shared.estimatedMinutes(for: item),
                 scheduledStart: item.scheduledStart,
-                scheduledEnd: item.scheduledEnd
+                scheduledEnd: item.scheduledEnd,
+                project: item.project
             )
         }
 
@@ -156,7 +159,8 @@ final class SharedStateService: ObservableObject {
                     difficultyScore: difficulty,
                     isComplex: change.isComplex ?? false,
                     sortOrder: newOrder,
-                    isToday: true
+                    isToday: true,
+                    project: change.project
                 )
                 context.insert(item)
 
@@ -199,6 +203,11 @@ final class SharedStateService: ObservableObject {
                 if let item = tasks.first(where: { $0.title.lowercased() == change.title.lowercased() }),
                    let d = change.difficulty {
                     item.difficultyScore = max(1, min(5, d))
+                }
+
+            case .setProject:
+                if let item = tasks.first(where: { $0.title.lowercased() == change.title.lowercased() }) {
+                    item.project = change.project
                 }
             }
         }

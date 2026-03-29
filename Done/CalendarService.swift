@@ -226,11 +226,18 @@ final class CalendarService: ObservableObject {
     private func heuristicMinutes(title: String, difficulty: Int) -> Int {
         let lower = title.lowercased()
         let heavy  = ["write", "draft", "design", "build", "implement", "develop", "create",
-                      "refactor", "research", "plan", "prepare", "architect", "analyze", "document"]
+                      "refactor", "research", "plan", "prepare", "architect", "analyze", "analyse",
+                      "document", "thesis", "dissertation", "essay", "paper", "report", "proposal",
+                      "presentation", "slides", "clustering", "classification", "training",
+                      "model", "algorithm", "pipeline", "project", "assignment", "homework",
+                      "study", "learn", "coding", "program", "migrate", "integrate", "deploy"]
         let medium = ["review", "update", "fix", "edit", "check", "test", "read",
-                      "call", "meet", "debug", "interview", "discuss"]
+                      "call", "meet", "debug", "interview", "discuss", "explore",
+                      "setup", "configure", "install", "organize", "sort", "clean",
+                      "outline", "brainstorm", "draft"]
         let quick  = ["reply", "email", "message", "buy", "schedule", "book",
-                      "confirm", "approve", "ping", "send", "submit", "share"]
+                      "confirm", "approve", "ping", "send", "submit", "share",
+                      "print", "sign", "pay", "order", "lookup"]
 
         let isHeavy  = heavy.contains  { lower.contains($0) }
         let isMedium = !isHeavy  && medium.contains { lower.contains($0) }
@@ -240,13 +247,13 @@ final class CalendarService: ObservableObject {
         case 5: return 90
         case 4: return isHeavy ? 75 : 60
         case 3: return isHeavy ? 60 : isMedium ? 45 : 35
-        case 2: return isHeavy ? 40 : isMedium ? 25 : isQuick ? 15 : 20
-        case 1: return isQuick ?  8 : isMedium ? 18 : 12
+        case 2: return isHeavy ? 45 : isMedium ? 30 : isQuick ? 15 : 25
+        case 1: return isHeavy ? 30 : isQuick ? 8 : isMedium ? 18 : 20
         default:
-            if isHeavy  { return 40 }
-            if isMedium { return 25 }
+            if isHeavy  { return 45 }
+            if isMedium { return 30 }
             if isQuick  { return 10 }
-            return 20
+            return 25
         }
     }
 }

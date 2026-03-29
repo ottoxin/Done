@@ -22,6 +22,7 @@ Fields:
   - `isToday` — true = planned for today, false = someday/waitlist
   - `estimatedMinutes` — AI or heuristic time estimate
   - `scheduledStart` / `scheduledEnd` — ISO8601, null if not yet scheduled
+  - `project` — project/category name (string or null)
 
 ## Writing updates
 
@@ -41,7 +42,7 @@ Write a JSON file to `~/.done/updates.json`. The app applies it and deletes the 
 
 **Add a task**
 ```json
-{ "type": "add", "title": "Buy coffee", "difficulty": 1, "isComplex": false }
+{ "type": "add", "title": "Buy coffee", "difficulty": 1, "isComplex": false, "project": "Personal" }
 ```
 
 **Complete a task**
@@ -68,6 +69,15 @@ Write a JSON file to `~/.done/updates.json`. The app applies it and deletes the 
 ```json
 { "type": "reschedule", "title": "Write proposal", "scheduledStart": "2026-03-23T14:00:00Z", "scheduledEnd": "2026-03-23T15:00:00Z" }
 ```
+
+**Set project** (assign or change a task's project/category)
+```json
+{ "type": "setProject", "title": "Write proposal", "project": "Research" }
+```
+
+## Chat memory
+
+The app maintains a memory file at `~/.done/memory.md` that is sent as context with every chat message. Users can edit it in Settings to store persistent preferences, notes, and context.
 
 ## Example session
 
