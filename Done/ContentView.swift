@@ -2930,116 +2930,147 @@ struct ProjectTimeChart: View {
 struct HeatmapView: View {
     let items: [TodoItem]
 
-    private let cols = 7
-    private let totalDays = 28
-    private let spacing: CGFloat = 5
+    private let cellSize: CGFloat = 20
+    private let cellSpacing: CGFloat = 4
+    // ISO week order: Mon first
+    private let dayLabels = ["M", "T", "W", "T", "F", "S", "S"]
 
-    @State private var hoveredIndex: Int? = nil
+    @State private var hoveredDate: Date? = nil
 
-    private func date(for dayOffset: Int) -> Date {
-        Calendar.current.date(byAdding: .day, value: -dayOffset, to: Date())!
+    private let cal = Calendar.current
+
+    /// The Monday that starts the 4-week window (4 cols × 7 rows = 28 days)
+    private var startDate: Date {
+        let today = Date()
+        // .weekday: 1=Sun, 2=Mon … 7=Sat
+        let weekday = cal.component(.weekday, from: today)
+        let daysFromMonday = (weekday - 2 + 7) % 7
+        let thisMonday = cal.date(byAdding: .day, value: -daysFromMonday, to: today)!
+        let start = cal.date(byAdding: .weekOfYear, value: -3, to: thisMonday)!
+        return cal.startOfDay(for: start)
     }
 
-    private func completedCount(for dayOffset: Int) -> Int {
-        let d = date(for: dayOffset)
-        return items.filter {
+    private func cellDate(row: Int, col: Int) -> Date {
+        cal.date(byAdding: .day, value: col * 7 + row, to: startDate)!
+    }
+
+    private func completedCount(for date: Date) -> Int {
+        items.filter {
             guard let completedAt = $0.completedAt else { return false }
-            return Calendar.current.isDate(completedAt, inSameDayAs: d)
+            return cal.isDate(completedAt, inSameDayAs: date)
         }.count
     }
 
-    private func opacity(for dayOffset: Int) -> Double {
-        let count = completedCount(for: dayOffset)
-        if count == 0 { return 0.08 }
-        if count == 1 { return 0.30 }
-        if count == 2 { return 0.50 }
-        if count == 3 { return 0.70 }
-        return min(0.80 + Double(count - 4) * 0.05, 1.0)
+    private var currentStreak: Int {
+        var count = 0
+        let today = Date()
+        for offset in 0...365 {
+            guard let d = cal.date(byAdding: .day, value: -offset, to: today) else { break }
+            if completedCount(for: d) > 0 { count += 1 } else { break }
+        }
+        return count
     }
 
-    private func tooltipPosition(
-        index: Int,
-        cell: CGFloat,
-        gridWidth: CGFloat,
-        gridHeight: CGFloat
-    ) -> CGPoint {
-        let row = index / cols
-        let col = index % cols
+    private var thisMonthTotal: Int {
+        let comps = cal.dateComponents([.year, .month], from: Date())
+        guard let start = cal.date(from: comps) else { return 0 }
+        return items.filter {
+            guard let completedAt = $0.completedAt else { return false }
+            return completedAt >= start
+        }.count
+    }
 
-        let x = CGFloat(col) * (cell + spacing) + cell / 2
-        var y = CGFloat(row) * (cell + spacing) - 14
-
-        if y < 8 {
-            y = CGFloat(row) * (cell + spacing) + cell + 18
-        }
-
-        let clampedX = min(max(x, 60), gridWidth - 60)
-        let clampedY = min(max(y, 10), gridHeight - 10)
-
-        return CGPoint(x: clampedX, y: clampedY)
+    private func cellFill(count: Int, isFuture: Bool) -> Color {
+        if isFuture { return .clear }
+        if count == 0 { return Color.primary.opacity(0.06) }
+        let t = min(1.0, Double(count) / 5.0)
+        return Color.indigo.opacity(0.22 + t * 0.68)
     }
 
     var body: some View {
-        GeometryReader { geo in
-            let raw = (geo.size.width - CGFloat(cols - 1) * spacing) / CGFloat(cols)
-            let cell = min(26, max(16, floor(raw)))
+        VStack(alignment: .leading, spacing: 10) {
+            // Summary badges
+            HStack(spacing: 10) {
+                if currentStreak > 0 {
+                    HStack(spacing: 3) {
+                        Image(systemName: "flame.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.orange)
+                        Text(currentStreak == 1 ? "1 day streak" : "\(currentStreak) day streak")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.orange)
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.orange.opacity(0.10))
+                    .clipShape(Capsule())
+                }
 
-            let rows = Int(ceil(Double(totalDays) / Double(cols)))
-            let gridWidth = cell * CGFloat(cols) + spacing * CGFloat(cols - 1)
-            let gridHeight = cell * CGFloat(rows) + spacing * CGFloat(rows - 1)
+                Text("\(thisMonthTotal) done this month")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
 
-            ZStack(alignment: .topLeading) {
-                LazyVGrid(
-                    columns: Array(repeating: GridItem(.fixed(cell), spacing: spacing), count: cols),
-                    alignment: .leading,
-                    spacing: spacing
-                ) {
-                    ForEach(0..<totalDays, id: \.self) { i in
-                        let dayOffset = (totalDays - 1) - i
-                        let count = completedCount(for: dayOffset)
-
-                        let radius = max(4, cell * 0.22)
-
-                        RoundedRectangle(cornerRadius: radius, style: .continuous)
-                            .fill(Color.blue.opacity(opacity(for: dayOffset)))
-                            .frame(width: cell, height: cell)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                                    .stroke(Color.black.opacity(hoveredIndex == i ? 0.08 : 0.0), lineWidth: 1)
-                            )
-
-                            .contentShape(Rectangle())
-                            .onHover { hovering in
-                                withAnimation(.easeOut(duration: 0.12)) {
-                                    hoveredIndex = hovering ? i : (hoveredIndex == i ? nil : hoveredIndex)
-                                }
-                            }
-                            .accessibilityLabel("Finished \(count) todos")
+            // Week-aligned calendar grid
+            HStack(alignment: .top, spacing: cellSpacing + 4) {
+                // Weekday labels (Mon–Sun)
+                VStack(alignment: .trailing, spacing: cellSpacing) {
+                    ForEach(Array(dayLabels.enumerated()), id: \.offset) { _, label in
+                        Text(label)
+                            .font(.system(size: 8, weight: .medium, design: .rounded))
+                            .foregroundStyle(.quaternary)
+                            .frame(height: cellSize)
                     }
                 }
-                .frame(width: gridWidth, height: gridHeight, alignment: .topLeading)
 
-                if let i = hoveredIndex {
-                    let dayOffset = (totalDays - 1) - i
-                    let count = completedCount(for: dayOffset)
-                    let d = date(for: dayOffset)
+                // 4 week columns
+                HStack(spacing: cellSpacing) {
+                    ForEach(0..<4, id: \.self) { col in
+                        VStack(spacing: cellSpacing) {
+                            ForEach(0..<7, id: \.self) { row in
+                                let d = cellDate(row: row, col: col)
+                                let isFuture = d > Date()
+                                let isToday = cal.isDateInToday(d)
+                                let count = isFuture ? 0 : completedCount(for: d)
 
-                    Text("Finished \(count) todos on \(d, format: .dateTime.month().day())")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(Color.black.opacity(0.78))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .allowsHitTesting(false)
-                        .position(tooltipPosition(index: i, cell: cell, gridWidth: gridWidth, gridHeight: gridHeight))
-                        .transition(.opacity)
+                                Circle()
+                                    .fill(cellFill(count: count, isFuture: isFuture))
+                                    .frame(width: cellSize, height: cellSize)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(
+                                                isToday ? Color.indigo.opacity(0.55) : .clear,
+                                                lineWidth: 1.5
+                                            )
+                                    )
+                                    .onHover { hovering in
+                                        withAnimation(.easeOut(duration: 0.1)) {
+                                            hoveredDate = hovering ? d : nil
+                                        }
+                                    }
+                            }
+                        }
+                    }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: gridHeight)
+
+            // Hover info line (stable height)
+            Group {
+                if let d = hoveredDate, d <= Date() {
+                    let count = completedCount(for: d)
+                    HStack(spacing: 4) {
+                        Text(d, format: .dateTime.weekday(.abbreviated).month(.abbreviated).day())
+                        Text("·")
+                        Text(count == 0 ? "nothing done" : "\(count) task\(count == 1 ? "" : "s") done")
+                            .fontWeight(.semibold)
+                    }
+                    .foregroundStyle(.secondary)
+                } else {
+                    Text(" ") // keeps layout stable
+                }
+            }
+            .font(.system(size: 10))
         }
-        .frame(height: 24 * 4 + spacing * 3)
     }
 }
 
