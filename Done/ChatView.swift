@@ -38,6 +38,17 @@ struct ChatView: View {
                 .buttonStyle(.plain)
                 .help("Edit memory file")
 
+                // Refresh availability
+                Button {
+                    chat.checkAvailability()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Re-check CLI availability")
+
                 // Clear button
                 Button {
                     chat.clearHistory()
