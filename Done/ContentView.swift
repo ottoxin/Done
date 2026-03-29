@@ -1338,8 +1338,16 @@ struct ContentView: View {
 
     func projectColor(_ name: String) -> Color {
         let colors: [Color] = [.blue, .purple, .orange, .teal, .pink, .green, .indigo, .mint, .cyan, .red]
-        let hash = abs(name.hashValue)
-        return colors[hash % colors.count]
+        return colors[stableHash(name) % colors.count]
+    }
+
+    /// Deterministic hash (djb2) — stable across app launches unlike hashValue
+    private func stableHash(_ string: String) -> Int {
+        var hash = 5381
+        for byte in string.utf8 {
+            hash = ((hash &<< 5) &+ hash) &+ Int(byte)
+        }
+        return abs(hash)
     }
 
     private func formatProjectTime(_ minutes: Int) -> String {
@@ -2163,8 +2171,9 @@ struct TaskRowView: View {
 
     private func projectColorFor(_ name: String) -> Color {
         let colors: [Color] = [.blue, .purple, .orange, .teal, .pink, .green, .indigo, .mint, .cyan, .red]
-        let hash = abs(name.hashValue)
-        return colors[hash % colors.count]
+        var hash = 5381
+        for byte in name.utf8 { hash = ((hash &<< 5) &+ hash) &+ Int(byte) }
+        return colors[abs(hash) % colors.count]
     }
 
     private func toggleCompleted() {
@@ -2283,7 +2292,9 @@ struct FocusModeView: View {
 
     private func projectColor(_ name: String) -> Color {
         let colors: [Color] = [.blue, .purple, .orange, .teal, .pink, .green, .indigo, .mint, .cyan, .red]
-        return colors[abs(name.hashValue) % colors.count]
+        var hash = 5381
+        for byte in name.utf8 { hash = ((hash &<< 5) &+ hash) &+ Int(byte) }
+        return colors[abs(hash) % colors.count]
     }
 
     var body: some View {
@@ -2930,26 +2941,17 @@ struct ProjectTimeChart: View {
 struct HeatmapView: View {
     let items: [TodoItem]
 
-    private let cellSize: CGFloat = 18
-    private let cellSpacing: CGFloat = 4
-    private let dayLabels = ["M", "T", "W", "T", "F", "S", "S"]
-
-    @State private var hoveredDate: Date? = nil
-
+    private let totalDays = 28
+    private let barSpacing: CGFloat = 3
     private let cal = Calendar.current
 
-    /// Monday that starts the 4-week window
-    private var startDate: Date {
-        let today = Date()
-        let weekday = cal.component(.weekday, from: today)
-        let daysFromMonday = (weekday - 2 + 7) % 7
-        let thisMonday = cal.date(byAdding: .day, value: -daysFromMonday, to: today)!
-        let start = cal.date(byAdding: .weekOfYear, value: -3, to: thisMonday)!
-        return cal.startOfDay(for: start)
-    }
+    @State private var hoveredIndex: Int? = nil
 
-    private func cellDate(row: Int, col: Int) -> Date {
-        cal.date(byAdding: .day, value: col * 7 + row, to: startDate)!
+    // MARK: - Data
+
+    private func dateFor(index: Int) -> Date {
+        // index 0 = 27 days ago, index 27 = today
+        cal.date(byAdding: .day, value: -(totalDays - 1 - index), to: cal.startOfDay(for: Date()))!
     }
 
     private func completedCount(for date: Date) -> Int {
@@ -2959,167 +2961,132 @@ struct HeatmapView: View {
         }.count
     }
 
-    /// All 28 day counts, oldest first
-    private var dayCounts: [Int] {
-        (0..<28).map { i in
-            let col = i / 7
-            let row = i % 7
-            let d = cellDate(row: row, col: col)
-            return d > Date() ? 0 : completedCount(for: d)
-        }
+    private var counts: [Int] {
+        (0..<totalDays).map { completedCount(for: dateFor(index: $0)) }
     }
 
+    private var maxCount: Int { max(1, counts.max() ?? 1) }
+
     private var currentStreak: Int {
-        var count = 0
+        var s = 0
         let today = Date()
         for offset in 0...365 {
             guard let d = cal.date(byAdding: .day, value: -offset, to: today) else { break }
-            if completedCount(for: d) > 0 { count += 1 } else { break }
+            if completedCount(for: d) > 0 { s += 1 } else { break }
         }
-        return count
+        return s
     }
 
-    private var totalIn28Days: Int {
-        dayCounts.reduce(0, +)
-    }
+    private var totalCompleted: Int { counts.reduce(0, +) }
 
     private var avgPerDay: Double {
-        let weekday = cal.component(.weekday, from: Date())
-        let daysFromMonday = (weekday - 2 + 7) % 7
-        let daysElapsed = 21 + daysFromMonday + 1 // days from start to today inclusive
-        guard daysElapsed > 0 else { return 0 }
-        return Double(totalIn28Days) / Double(daysElapsed)
+        guard totalDays > 0 else { return 0 }
+        return Double(totalCompleted) / Double(totalDays)
     }
 
-    private var bestDayInfo: (count: Int, label: String) {
-        var best = 0
-        var bestDate = Date()
-        let today = Date()
-        for offset in 0..<28 {
-            guard let d = cal.date(byAdding: .day, value: -offset, to: today) else { continue }
-            let c = completedCount(for: d)
-            if c > best { best = c; bestDate = d }
-        }
-        let fmt = DateFormatter()
-        fmt.dateFormat = "EEE, MMM d"
-        return (best, fmt.string(from: bestDate))
-    }
-
-    private func cellFill(count: Int, isFuture: Bool) -> Color {
-        if isFuture { return .clear }
-        if count == 0 { return Color.primary.opacity(0.06) }
-        let t = min(1.0, Double(count) / 5.0)
-        return Color.indigo.opacity(0.22 + t * 0.68)
-    }
+    // MARK: - Body
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            // Left: calendar grid
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: cellSpacing + 4) {
-                    // Weekday labels
-                    VStack(alignment: .trailing, spacing: cellSpacing) {
-                        ForEach(Array(dayLabels.enumerated()), id: \.offset) { _, label in
-                            Text(label)
-                                .font(.system(size: 8, weight: .medium, design: .rounded))
-                                .foregroundStyle(.quaternary)
-                                .frame(height: cellSize)
-                        }
+        VStack(alignment: .leading, spacing: 14) {
+            // Inline stats row
+            HStack(spacing: 16) {
+                if currentStreak > 0 {
+                    HStack(spacing: 4) {
+                        Image(systemName: "flame.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.orange)
+                        Text("\(currentStreak) day streak")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.orange)
                     }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.orange.opacity(0.08))
+                    .clipShape(Capsule())
+                }
 
-                    // 4 week columns
-                    HStack(spacing: cellSpacing) {
-                        ForEach(0..<4, id: \.self) { col in
-                            VStack(spacing: cellSpacing) {
-                                ForEach(0..<7, id: \.self) { row in
-                                    let d = cellDate(row: row, col: col)
-                                    let isFuture = d > Date()
-                                    let isToday = cal.isDateInToday(d)
-                                    let count = isFuture ? 0 : completedCount(for: d)
+                Text("\(totalCompleted) tasks")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
 
-                                    Circle()
-                                        .fill(cellFill(count: count, isFuture: isFuture))
-                                        .frame(width: cellSize, height: cellSize)
-                                        .overlay(
-                                            Circle()
-                                                .stroke(
-                                                    isToday ? Color.indigo.opacity(0.55) : .clear,
-                                                    lineWidth: 1.5
-                                                )
-                                        )
-                                        .onHover { hovering in
-                                            withAnimation(.easeOut(duration: 0.1)) {
-                                                hoveredDate = hovering ? d : nil
-                                            }
-                                        }
-                                }
+                Text(String(format: "%.1f / day", avgPerDay))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+
+                Spacer()
+            }
+
+            // Bar chart — fills the full width
+            GeometryReader { geo in
+                let availableWidth = geo.size.width
+                let barWidth = (availableWidth - barSpacing * CGFloat(totalDays - 1)) / CGFloat(totalDays)
+                let chartHeight = geo.size.height
+
+                HStack(alignment: .bottom, spacing: barSpacing) {
+                    ForEach(0..<totalDays, id: \.self) { i in
+                        let count = counts[i]
+                        let d = dateFor(index: i)
+                        let isFuture = d > Date()
+                        let isToday = i == totalDays - 1
+                        let ratio = isFuture ? 0 : (maxCount > 0 ? Double(count) / Double(maxCount) : 0)
+                        let barHeight = max(isFuture ? 0 : 3, chartHeight * ratio)
+                        let isWeekStart = cal.component(.weekday, from: d) == 2 // Monday
+
+                        VStack(spacing: 2) {
+                            RoundedRectangle(cornerRadius: max(2, barWidth * 0.3))
+                                .fill(
+                                    isFuture ? Color.clear :
+                                    isToday ? Color.indigo :
+                                    count > 0 ? Color.indigo.opacity(0.25 + ratio * 0.55) :
+                                    Color.primary.opacity(0.06)
+                                )
+                                .frame(width: barWidth, height: barHeight)
+
+                            // Week separator dots under Mondays
+                            if isWeekStart {
+                                Circle()
+                                    .fill(Color.primary.opacity(0.15))
+                                    .frame(width: 3, height: 3)
+                            } else {
+                                Spacer().frame(height: 3)
                             }
                         }
-                    }
-                }
-
-                // Hover info
-                Group {
-                    if let d = hoveredDate, d <= Date() {
-                        let count = completedCount(for: d)
-                        HStack(spacing: 4) {
-                            Text(d, format: .dateTime.weekday(.abbreviated).month(.abbreviated).day())
-                            Text("·")
-                            Text(count == 0 ? "nothing done" : "\(count) task\(count == 1 ? "" : "s") done")
-                                .fontWeight(.semibold)
+                        .onHover { hovering in
+                            hoveredIndex = hovering ? i : nil
                         }
-                        .foregroundStyle(.secondary)
-                    } else {
-                        Text(" ")
                     }
                 }
-                .font(.system(size: 10))
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(height: 80)
 
-            Spacer(minLength: 24)
-
-            // Right: stats panel
-            VStack(alignment: .leading, spacing: 20) {
-                // Streak
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Image(systemName: "flame.fill")
-                            .font(.system(size: 14))
-                            .foregroundStyle(currentStreak > 0 ? Color.orange : Color.gray.opacity(0.3))
-                        Text("\(currentStreak)")
-                            .font(.system(size: 28, weight: .bold, design: .rounded))
+            // Hover info / week labels row
+            HStack {
+                if let i = hoveredIndex {
+                    let d = dateFor(index: i)
+                    let count = counts[i]
+                    HStack(spacing: 4) {
+                        Text(d, format: .dateTime.weekday(.abbreviated).month(.abbreviated).day())
+                        Text("·")
+                        Text(count == 0 ? "no tasks" : "\(count) task\(count == 1 ? "" : "s") done")
+                            .fontWeight(.semibold)
                     }
-                    Text("day streak")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-
-                // Average per day
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(String(format: "%.1f", avgPerDay))
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
-                        .foregroundStyle(.primary)
-                    Text("tasks / day")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-
-                // Best day
-                if bestDayInfo.count > 0 {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("\(bestDayInfo.count)")
-                            .font(.system(size: 24, weight: .bold, design: .rounded))
-                            .foregroundStyle(.indigo)
-                        Text("best day")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                        Text(bestDayInfo.label)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.tertiary)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .transition(.opacity)
+                } else {
+                    // Week labels
+                    HStack {
+                        Text("4 weeks ago")
+                        Spacer()
+                        Text("2 weeks ago")
+                        Spacer()
+                        Text("Today")
                     }
+                    .font(.system(size: 9))
+                    .foregroundStyle(.quaternary)
                 }
             }
-            .padding(.top, 2)
         }
     }
 }
