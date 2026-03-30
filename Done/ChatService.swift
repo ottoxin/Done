@@ -253,10 +253,13 @@ final class ChatService: ObservableObject {
         let provider = cliProvider
         let memory = readMemory()
         let override = cliPathOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Pass recent history so Claude Code has context across "turns"
+        let recentHistory = messages.dropLast(2).suffix(6) // last 3 exchanges before this one
 
         Task { @MainActor in
             let response = await Task.detached {
-                await Self.runCLI(provider: provider, prompt: trimmed, memory: memory, pathOverride: override)
+                await Self.runCLI(provider: provider, prompt: trimmed, memory: memory,
+                                  pathOverride: override, history: Array(recentHistory))
             }.value
             if let idx = self.messages.firstIndex(where: { $0.id == placeholderID }) {
                 self.messages[idx].text = response
@@ -266,7 +269,8 @@ final class ChatService: ObservableObject {
     }
 
     /// Run the CLI command.
-    private static func runCLI(provider: CLIProvider, prompt: String, memory: String, pathOverride: String = "") async -> String {
+    private static func runCLI(provider: CLIProvider, prompt: String, memory: String,
+                               pathOverride: String = "", history: [ChatMessage] = []) async -> String {
         let command = provider.command
 
         let execPath = findCLI(command, override: pathOverride)
@@ -281,15 +285,22 @@ final class ChatService: ObservableObject {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: path)
 
-        // Build the prompt with memory context
-        var fullPrompt = prompt
+        // Build full prompt: memory + recent conversation history + current request
+        var parts: [String] = []
         if !memory.isEmpty {
-            fullPrompt = "Context from memory file:\n\(memory)\n\n---\nUser request: \(prompt)"
+            parts.append("Memory/context:\n\(memory)")
         }
+        if !history.isEmpty {
+            let historyText = history.map { "[\($0.role.rawValue.uppercased())]: \($0.text)" }.joined(separator: "\n")
+            parts.append("Recent conversation:\n\(historyText)")
+        }
+        parts.append("User: \(prompt)")
+        let fullPrompt = parts.joined(separator: "\n\n---\n\n")
 
         switch provider {
         case .claudeCode:
-            proc.arguments = ["--print", fullPrompt]
+            // --dangerously-skip-permissions: allow file writes without interactive approval
+            proc.arguments = ["--print", "--dangerously-skip-permissions", fullPrompt]
         case .codex:
             proc.arguments = ["--quiet", "--full-auto", fullPrompt]
         }
