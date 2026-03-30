@@ -65,12 +65,35 @@ final class ChatService: ObservableObject {
     func checkAvailability() {
         let cmd = cliProvider.command
         Task { @MainActor in
-            let result = await Task.detached { Self.which(cmd) }.value
+            let result = await Task.detached { Self.findCLI(cmd) }.value
             self.isAvailable = result != nil
         }
     }
 
-    nonisolated private static func which(_ command: String) -> String? {
+    /// Find a CLI command by checking well-known paths (macOS apps don't inherit shell PATH).
+    nonisolated private static func findCLI(_ command: String) -> String? {
+        // Direct path checks — most reliable for sandboxed/Launchpad apps
+        let searchPaths = [
+            "/opt/homebrew/bin/\(command)",
+            "/usr/local/bin/\(command)",
+            "\(NSHomeDirectory())/.npm-global/bin/\(command)",
+        ]
+        for path in searchPaths {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+        // Check nvm paths
+        let nvmBase = "\(NSHomeDirectory())/.nvm/versions/node"
+        if let contents = try? FileManager.default.contentsOfDirectory(atPath: nvmBase) {
+            for entry in contents.sorted().reversed() {
+                let candidate = "\(nvmBase)/\(entry)/bin/\(command)"
+                if FileManager.default.isExecutableFile(atPath: candidate) {
+                    return candidate
+                }
+            }
+        }
+        // Fallback: try /usr/bin/which (works when run from Xcode, not Launchpad)
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         proc.arguments = [command]
@@ -142,34 +165,7 @@ final class ChatService: ObservableObject {
     private static func runCLI(provider: CLIProvider, prompt: String, memory: String) async -> String {
         let command = provider.command
 
-        // Try to find the command
-        var execPath: String? = which(command)
-        if execPath == nil {
-            let searchPaths = [
-                "/usr/local/bin/\(command)",
-                "/opt/homebrew/bin/\(command)",
-                "\(NSHomeDirectory())/.npm-global/bin/\(command)",
-            ]
-            for path in searchPaths {
-                if FileManager.default.isExecutableFile(atPath: path) {
-                    execPath = path
-                    break
-                }
-            }
-            // Also check nvm paths
-            if execPath == nil {
-                let nvmBase = "\(NSHomeDirectory())/.nvm/versions/node"
-                if let contents = try? FileManager.default.contentsOfDirectory(atPath: nvmBase) {
-                    for entry in contents.sorted().reversed() {
-                        let candidate = "\(nvmBase)/\(entry)/bin/\(command)"
-                        if FileManager.default.isExecutableFile(atPath: candidate) {
-                            execPath = candidate
-                            break
-                        }
-                    }
-                }
-            }
-        }
+        let execPath = findCLI(command)
 
         guard let path = execPath else {
             return "\(provider.rawValue) CLI not found. Install it first:\n" +
