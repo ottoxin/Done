@@ -64,7 +64,6 @@ final class ChatService: ObservableObject {
         self.cliPathOverride = UserDefaults.standard.string(forKey: "chatCLIPathOverride") ?? ""
         checkAvailability()
         ensureMemoryFile()
-        syncCLAUDEmd()
     }
 
     /// Check if the selected CLI is installed and accessible.
@@ -119,13 +118,8 @@ final class ChatService: ObservableObject {
         return path?.isEmpty == false ? path : nil
     }
 
-    /// Write CLAUDE.md to home directory so the CLI picks up the app bridge instructions.
-    private func syncCLAUDEmd() {
-        let dest = FileManager.default.homeDirectoryForCurrentUser.appending(path: "CLAUDE.md")
-        try? claudeMdContent.write(to: dest, atomically: true, encoding: .utf8)
-    }
-
-    private let claudeMdContent = """
+    /// System instructions embedded in every prompt — no ~/CLAUDE.md needed.
+    static let claudeMdContent = """
     # Done — AI Planning Assistant
 
     You are helping the user manage their day using the Done app (a native macOS todo/time manager).
@@ -289,10 +283,10 @@ final class ChatService: ObservableObject {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: path)
 
-        // Build full prompt: memory + recent conversation history + current request
-        var parts: [String] = []
+        // Build full prompt: system instructions + memory + history + current request
+        var parts: [String] = [claudeMdContent]
         if !memory.isEmpty {
-            parts.append("Memory/context:\n\(memory)")
+            parts.append("User memory/preferences:\n\(memory)")
         }
         if !history.isEmpty {
             let historyText = history.map { "[\($0.role.rawValue.uppercased())]: \($0.text)" }.joined(separator: "\n")
