@@ -163,10 +163,9 @@ final class SharedStateService: ObservableObject {
                     project: change.project
                 )
                 context.insert(item)
-                // TODO: find-or-create a Project object for change.project if non-nil.
-                // This requires fetching existing Project objects, but applyUpdates doesn't
-                // receive allProjectObjects. The ContentView's onChange(of: pendingUpdates)
-                // handler could pass them in, or a separate fetch descriptor could be used here.
+                if let name = change.project {
+                    Self.findOrCreateProject(name: name, context: context)
+                }
 
             case .complete:
                 if let item = tasks.first(where: { $0.title.lowercased() == change.title.lowercased() }) {
@@ -212,6 +211,9 @@ final class SharedStateService: ObservableObject {
             case .setProject:
                 if let item = tasks.first(where: { $0.title.lowercased() == change.title.lowercased() }) {
                     item.project = change.project
+                    if let name = change.project {
+                        Self.findOrCreateProject(name: name, context: context)
+                    }
                 }
             }
         }
@@ -229,4 +231,25 @@ final class SharedStateService: ObservableObject {
 
     var stateFilePath: String { stateURL.path }
     var updatesFilePath: String { updatesURL.path }
+
+    /// Find an existing Project by name, or create one with the next palette color.
+    @discardableResult
+    static func findOrCreateProject(name: String, context: ModelContext) -> Project {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let descriptor = FetchDescriptor<Project>(
+            predicate: #Predicate { $0.name == trimmed }
+        )
+        if let existing = (try? context.fetch(descriptor))?.first {
+            return existing
+        }
+        let countDescriptor = FetchDescriptor<Project>()
+        let count = (try? context.fetch(countDescriptor))?.count ?? 0
+        let project = Project(
+            name: trimmed,
+            colorIndex: count % Project.palette.count,
+            sortOrder: count
+        )
+        context.insert(project)
+        return project
+    }
 }
