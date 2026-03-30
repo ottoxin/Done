@@ -47,6 +47,10 @@ final class ChatService: ObservableObject {
         didSet { UserDefaults.standard.set(cliProvider.rawValue, forKey: "chatCLIProvider"); checkAvailability() }
     }
 
+    @Published var cliPathOverride: String {
+        didSet { UserDefaults.standard.set(cliPathOverride, forKey: "chatCLIPathOverride"); checkAvailability() }
+    }
+
     /// Memory file path — persistent context for the chat assistant.
     static let memoryURL: URL = {
         let dir = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".done")
@@ -57,6 +61,7 @@ final class ChatService: ObservableObject {
     private init() {
         let raw = UserDefaults.standard.string(forKey: "chatCLIProvider") ?? CLIProvider.claudeCode.rawValue
         self.cliProvider = CLIProvider(rawValue: raw) ?? .claudeCode
+        self.cliPathOverride = UserDefaults.standard.string(forKey: "chatCLIPathOverride") ?? ""
         checkAvailability()
         ensureMemoryFile()
     }
@@ -64,14 +69,19 @@ final class ChatService: ObservableObject {
     /// Check if the selected CLI is installed and accessible.
     func checkAvailability() {
         let cmd = cliProvider.command
+        let override = cliPathOverride.trimmingCharacters(in: .whitespacesAndNewlines)
         Task { @MainActor in
-            let result = await Task.detached { Self.findCLI(cmd) }.value
+            let result = await Task.detached { Self.findCLI(cmd, override: override) }.value
             self.isAvailable = result != nil
         }
     }
 
     /// Find a CLI command by checking well-known paths (macOS apps don't inherit shell PATH).
-    nonisolated private static func findCLI(_ command: String) -> String? {
+    nonisolated private static func findCLI(_ command: String, override: String = "") -> String? {
+        // Check manual override first
+        if !override.isEmpty && FileManager.default.isExecutableFile(atPath: override) {
+            return override
+        }
         // Direct path checks — most reliable for sandboxed/Launchpad apps
         let searchPaths = [
             "/opt/homebrew/bin/\(command)",
@@ -149,10 +159,11 @@ final class ChatService: ObservableObject {
 
         let provider = cliProvider
         let memory = readMemory()
+        let override = cliPathOverride.trimmingCharacters(in: .whitespacesAndNewlines)
 
         Task { @MainActor in
             let response = await Task.detached {
-                await Self.runCLI(provider: provider, prompt: trimmed, memory: memory)
+                await Self.runCLI(provider: provider, prompt: trimmed, memory: memory, pathOverride: override)
             }.value
             if let idx = self.messages.firstIndex(where: { $0.id == placeholderID }) {
                 self.messages[idx].text = response
@@ -162,10 +173,10 @@ final class ChatService: ObservableObject {
     }
 
     /// Run the CLI command.
-    private static func runCLI(provider: CLIProvider, prompt: String, memory: String) async -> String {
+    private static func runCLI(provider: CLIProvider, prompt: String, memory: String, pathOverride: String = "") async -> String {
         let command = provider.command
 
-        let execPath = findCLI(command)
+        let execPath = findCLI(command, override: pathOverride)
 
         guard let path = execPath else {
             return "\(provider.rawValue) CLI not found. Install it first:\n" +

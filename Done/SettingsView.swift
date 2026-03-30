@@ -71,6 +71,34 @@ struct SettingsView: View {
                         }
                         .pickerStyle(.segmented)
 
+                        // Manual path override
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("CLI Path (leave empty for auto-detect)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            HStack(spacing: 8) {
+                                TextField("/opt/homebrew/bin/claude", text: $chat.cliPathOverride)
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .padding(6)
+                                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.gray.opacity(0.06)))
+                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.gray.opacity(0.15)))
+
+                                Button("Browse...") {
+                                    let panel = NSOpenPanel()
+                                    panel.canChooseFiles = true
+                                    panel.canChooseDirectories = false
+                                    panel.allowsMultipleSelection = false
+                                    panel.directoryURL = URL(fileURLWithPath: "/opt/homebrew/bin")
+                                    if panel.runModal() == .OK, let url = panel.url {
+                                        chat.cliPathOverride = url.path
+                                    }
+                                }
+                                .controlSize(.small)
+                            }
+                        }
+
                         HStack(spacing: 6) {
                             Circle()
                                 .fill(chat.isAvailable ? Color.green : Color.red)
@@ -80,9 +108,21 @@ struct SettingsView: View {
                                  : "\(chat.cliProvider.rawValue) CLI not found")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+
+                            Spacer()
+
+                            Button {
+                                chat.checkAvailability()
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.blue)
+                            .help("Re-check availability")
                         }
 
-                        if !chat.isAvailable {
+                        if !chat.isAvailable && chat.cliPathOverride.isEmpty {
                             Text(chat.cliProvider == .claudeCode
                                  ? "Install: npm install -g @anthropic-ai/claude-code"
                                  : "Install: npm install -g @openai/codex")
