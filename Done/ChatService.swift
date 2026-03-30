@@ -203,12 +203,16 @@ final class ChatService: ObservableObject {
     { "type": "setProject", "title": "Write proposal", "project": "Research" }
     ```
 
-    ## Rules
-    - Match tasks by title (case-insensitive). Don't invent tasks that aren't in state.json.
+    ## Behavior rules — IMPORTANT
+    - **Act immediately. Never ask for confirmation.** If the user says "add X", add it now.
+    - **Never ask for difficulty.** Infer it from context: quick/small→1, normal→2, medium→3, large→4, big/complex→5. Default to 3 if unclear.
+    - **Never ask what project.** Use whatever project the user mentions. If none mentioned, leave project null.
+    - If the user says multiple tasks in one message, add ALL of them at once in a single updates.json.
+    - Match tasks by title (case-insensitive) when completing/deleting/reordering.
     - Keep `message` short (1–2 sentences). The user sees it as an alert in the app.
-    - Difficulty affects estimated time: 1→15m, 2→25m, 3→45m, 4→60m, 5→90m
-    - Don't write updates.json unless the user explicitly wants changes made.
-    - ALWAYS write updates.json when the user asks to add, complete, delete, or change tasks.
+    - Difficulty: 1→15m, 2→25m, 3→45m, 4→60m, 5→90m
+    - ALWAYS write updates.json for any add/complete/delete/change request — do it in the same response, not in a follow-up.
+    - After writing updates.json, confirm briefly what you did. Do NOT ask follow-up questions.
     """
 
     /// Ensure memory file exists with a default header.
