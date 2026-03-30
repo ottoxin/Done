@@ -64,6 +64,7 @@ final class ChatService: ObservableObject {
         self.cliPathOverride = UserDefaults.standard.string(forKey: "chatCLIPathOverride") ?? ""
         checkAvailability()
         ensureMemoryFile()
+        syncCLAUDEmd()
     }
 
     /// Check if the selected CLI is installed and accessible.
@@ -117,6 +118,98 @@ final class ChatService: ObservableObject {
         let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return path?.isEmpty == false ? path : nil
     }
+
+    /// Write CLAUDE.md to home directory so the CLI picks up the app bridge instructions.
+    private func syncCLAUDEmd() {
+        let dest = FileManager.default.homeDirectoryForCurrentUser.appending(path: "CLAUDE.md")
+        try? claudeMdContent.write(to: dest, atomically: true, encoding: .utf8)
+    }
+
+    private let claudeMdContent = """
+    # Done — AI Planning Assistant
+
+    You are helping the user manage their day using the Done app (a native macOS todo/time manager).
+
+    ## How it works
+
+    The app writes its live state to `~/.done/state.json` whenever tasks change.
+    You read that file to understand the current situation, then write `~/.done/updates.json` to make changes.
+    The app watches for `updates.json` and applies it automatically — usually within 2 seconds.
+
+    ## Reading current state
+
+    ```bash
+    cat ~/.done/state.json
+    ```
+
+    Fields:
+    - `date` — today's date
+    - `freeMinutesToday` — total free time left today (after calendar events)
+    - `tasks[]` — each task has:
+      - `title`, `difficulty` (1–5), `isComplex`, `isCompleted`, `sortOrder` (0 = top)
+      - `isToday` — true = planned for today, false = someday/waitlist
+      - `estimatedMinutes` — AI or heuristic time estimate
+      - `scheduledStart` / `scheduledEnd` — ISO8601, null if not yet scheduled
+      - `project` — project/category name (string or null)
+
+    ## Writing updates
+
+    Write a JSON file to `~/.done/updates.json`. The app applies it and deletes the file.
+
+    ```json
+    {
+      "timestamp": "<ISO8601 now>",
+      "message": "A short note shown to the user in the app (optional)",
+      "changes": [
+        ...
+      ]
+    }
+    ```
+
+    ### Change types
+
+    **Add a task**
+    ```json
+    { "type": "add", "title": "Buy coffee", "difficulty": 1, "isComplex": false, "project": "Personal" }
+    ```
+
+    **Complete a task**
+    ```json
+    { "type": "complete", "title": "Write proposal" }
+    ```
+
+    **Delete a task**
+    ```json
+    { "type": "delete", "title": "Old task" }
+    ```
+
+    **Reorder** (sortOrder 0 = top of list)
+    ```json
+    { "type": "reorder", "title": "Buy groceries", "sortOrder": 0 }
+    ```
+
+    **Change difficulty** (1 = 15 min, 2 = 25 min, 3 = 45 min, 4 = 60 min, 5 = 90 min)
+    ```json
+    { "type": "setDifficulty", "title": "Refactor UI", "difficulty": 2 }
+    ```
+
+    **Reschedule** (override the app's auto-schedule for a task)
+    ```json
+    { "type": "reschedule", "title": "Write proposal", "scheduledStart": "2026-03-23T14:00:00Z", "scheduledEnd": "2026-03-23T15:00:00Z" }
+    ```
+
+    **Set project** (assign or change a task's project/category)
+    ```json
+    { "type": "setProject", "title": "Write proposal", "project": "Research" }
+    ```
+
+    ## Rules
+    - Match tasks by title (case-insensitive). Don't invent tasks that aren't in state.json.
+    - Keep `message` short (1–2 sentences). The user sees it as an alert in the app.
+    - Difficulty affects estimated time: 1→15m, 2→25m, 3→45m, 4→60m, 5→90m
+    - Don't write updates.json unless the user explicitly wants changes made.
+    - ALWAYS write updates.json when the user asks to add, complete, delete, or change tasks.
+    """
 
     /// Ensure memory file exists with a default header.
     private func ensureMemoryFile() {
