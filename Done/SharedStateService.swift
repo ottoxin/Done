@@ -163,6 +163,10 @@ final class SharedStateService: ObservableObject {
                     project: change.project
                 )
                 context.insert(item)
+                // TODO: find-or-create a Project object for change.project if non-nil.
+                // This requires fetching existing Project objects, but applyUpdates doesn't
+                // receive allProjectObjects. The ContentView's onChange(of: pendingUpdates)
+                // handler could pass them in, or a separate fetch descriptor could be used here.
 
             case .complete:
                 if let item = tasks.first(where: { $0.title.lowercased() == change.title.lowercased() }) {

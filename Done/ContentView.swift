@@ -204,7 +204,7 @@ struct SmartTodosApp: App {
     @StateObject private var menuBarState = MenuBarState.shared
 
     var sharedModelContainer: ModelContainer = {
-        let schema = Schema([TodoItem.self])
+        let schema = Schema([TodoItem.self, Project.self])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         if let container = try? ModelContainer(for: schema, configurations: [config]) {
             return container
@@ -348,6 +348,7 @@ struct RadialTickView: View {
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var items: [TodoItem]
+    @Query(sort: \Project.sortOrder) private var allProjectObjects: [Project]
 
     @State private var newTaskTitle = ""
     @State private var isAnalyzing = false
@@ -782,9 +783,26 @@ struct ContentView: View {
 
                                     VStack(spacing: 6) {
                                         HStack(spacing: 8) {
-                                            Circle()
-                                                .fill(color)
-                                                .frame(width: 8, height: 8)
+                                            Button {
+                                                // cycle color
+                                                let projName = proj
+                                                if let projObj = allProjectObjects.first(where: { $0.name == projName }) {
+                                                    projObj.colorIndex = (projObj.colorIndex + 1) % Project.palette.count
+                                                } else {
+                                                    // create project object if it doesn't exist yet
+                                                    let newProject = Project(
+                                                        name: projName,
+                                                        colorIndex: (allProjectObjects.count + 1) % Project.palette.count,
+                                                        sortOrder: allProjectObjects.count
+                                                    )
+                                                    modelContext.insert(newProject)
+                                                }
+                                            } label: {
+                                                Circle()
+                                                    .fill(color)
+                                                    .frame(width: 10, height: 10)
+                                            }
+                                            .buttonStyle(.plain)
                                             Text(proj)
                                                 .font(.system(size: 12, weight: .semibold))
                                             Spacer()
@@ -1192,7 +1210,7 @@ struct ContentView: View {
                                     .foregroundStyle(.secondary)
                                     .padding(.horizontal, 24).padding(.top, 16)
                                 ForEach(tasks) { item in
-                                    TaskRowView(item: item, projects: allProjects, onDelete: {
+                                    TaskRowView(item: item, projects: allProjects, projectObjects: allProjectObjects, onDelete: {
                                         withAnimation { modelContext.delete(item) }
                                     })
                                     .padding(.horizontal, 20)
@@ -1233,7 +1251,7 @@ struct ContentView: View {
                 }
 
                 ForEach(tasks) { item in
-                    TaskRowView(item: item, projects: allProjects, onDelete: {
+                    TaskRowView(item: item, projects: allProjects, projectObjects: allProjectObjects, onDelete: {
                         withAnimation { modelContext.delete(item) }
                     })
                     .padding(.horizontal, 20)
@@ -1337,8 +1355,14 @@ struct ContentView: View {
     // MARK: - Helpers
 
     func projectColor(_ name: String) -> Color {
+        if let proj = allProjectObjects.first(where: { $0.name == name }) {
+            return Project.palette[proj.colorIndex % Project.palette.count]
+        }
+        // fallback deterministic hash
         let colors: [Color] = [.blue, .purple, .orange, .teal, .pink, .green, .indigo, .mint, .cyan, .red]
-        return colors[stableHash(name) % colors.count]
+        var hash = 5381
+        for byte in name.utf8 { hash = ((hash &<< 5) &+ hash) &+ Int(byte) }
+        return colors[abs(hash) % colors.count]
     }
 
     /// Deterministic hash (djb2) — stable across app launches unlike hashValue
@@ -1905,8 +1929,10 @@ struct InvolvementPickerPill: View {
 struct TaskRowView: View {
     @Bindable var item: TodoItem
     let projects: [String]
+    let projectObjects: [Project]
     var onDelete: () -> Void
 
+    @Environment(\.modelContext) private var modelContext
     @State private var isEditingTitle = false
     @State private var draftTitle = ""
     @State private var isEditingProject = false
@@ -2090,6 +2116,7 @@ struct TaskRowView: View {
                     ForEach(projects, id: \.self) { proj in
                         Button {
                             item.project = proj
+                            findOrCreateProject(name: proj)
                             isEditingProject = false
                         } label: {
                             HStack(spacing: 8) {
@@ -2128,13 +2155,19 @@ struct TaskRowView: View {
                     .focused($projectFocused)
                     .onSubmit {
                         let name = draftProject.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !name.isEmpty { item.project = name }
+                        if !name.isEmpty {
+                            item.project = name
+                            findOrCreateProject(name: name)
+                        }
                         isEditingProject = false
                     }
 
                 Button {
                     let name = draftProject.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !name.isEmpty { item.project = name }
+                    if !name.isEmpty {
+                        item.project = name
+                        findOrCreateProject(name: name)
+                    }
                     isEditingProject = false
                 } label: {
                     Image(systemName: "checkmark.circle.fill")
@@ -2170,10 +2203,27 @@ struct TaskRowView: View {
     }
 
     private func projectColorFor(_ name: String) -> Color {
+        if let proj = projectObjects.first(where: { $0.name == name }) {
+            return Project.palette[proj.colorIndex % Project.palette.count]
+        }
+        // fallback deterministic hash
         let colors: [Color] = [.blue, .purple, .orange, .teal, .pink, .green, .indigo, .mint, .cyan, .red]
         var hash = 5381
         for byte in name.utf8 { hash = ((hash &<< 5) &+ hash) &+ Int(byte) }
         return colors[abs(hash) % colors.count]
+    }
+
+    private func findOrCreateProject(name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if projectObjects.first(where: { $0.name == trimmed }) == nil {
+            let newProject = Project(
+                name: trimmed,
+                colorIndex: projectObjects.count % Project.palette.count,
+                sortOrder: projectObjects.count
+            )
+            modelContext.insert(newProject)
+        }
     }
 
     private func toggleCompleted() {
