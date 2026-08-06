@@ -20,7 +20,8 @@ struct ChatMessage: Identifiable, Equatable {
 }
 
 /// Which CLI to use for the chat interface.
-enum CLIProvider: String, CaseIterable, Identifiable {
+/// `nonisolated` so the off-main CLI runner can read `command`.
+nonisolated enum CLIProvider: String, CaseIterable, Identifiable {
     case claudeCode = "Claude Code"
     case codex = "Codex"
 
@@ -119,7 +120,7 @@ final class ChatService: ObservableObject {
     }
 
     /// System instructions embedded in every prompt — no ~/CLAUDE.md needed.
-    static let claudeMdContent = """
+    nonisolated static let claudeMdContent = """
     # Done — AI Planning Assistant
 
     You are helping the user manage their day using the Done app (a native macOS todo/time manager).
@@ -266,9 +267,18 @@ final class ChatService: ObservableObject {
         }
     }
 
+    /// Box used to carry the stderr read back from its queue.
+    nonisolated private final class OutputBox: @unchecked Sendable {
+        var data = Data()
+    }
+
     /// Run the CLI command.
-    private static func runCLI(provider: CLIProvider, prompt: String, memory: String,
-                               pathOverride: String = "", history: [ChatMessage] = []) async -> String {
+    ///
+    /// `nonisolated` is required: this class is `@MainActor`, so without it the
+    /// blocking `Process` calls below hop back onto the main actor and freeze the
+    /// UI for the whole run, even when called from `Task.detached`.
+    nonisolated private static func runCLI(provider: CLIProvider, prompt: String, memory: String,
+                                           pathOverride: String = "", history: [ChatMessage] = []) async -> String {
         let command = provider.command
 
         let execPath = findCLI(command, override: pathOverride)
@@ -320,10 +330,22 @@ final class ChatService: ObservableObject {
 
         do {
             try proc.run()
-            proc.waitUntilExit()
 
-            let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            // Drain both pipes *while* the child runs. Waiting for exit and reading
+            // afterwards deadlocks as soon as the child writes more than the pipe
+            // buffer (~64 KB) — it blocks on write, we block on wait, forever.
+            let outHandle = outPipe.fileHandleForReading
+            let errHandle = errPipe.fileHandleForReading
+
+            let errBox = OutputBox()
+            let errQueue = DispatchQueue(label: "done.cli.stderr")
+            errQueue.async { errBox.data = errHandle.readDataToEndOfFile() }
+
+            let outData = outHandle.readDataToEndOfFile()
+            errQueue.sync {}                // barrier: the stderr read has finished
+            let errData = errBox.data
+
+            proc.waitUntilExit()
 
             let output = String(data: outData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let errorOutput = String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

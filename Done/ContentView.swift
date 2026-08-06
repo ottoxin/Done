@@ -1336,13 +1336,17 @@ struct ContentView: View {
             let subMinutes = analysis.estimatedMinutes > 0
                 ? max(10, analysis.estimatedMinutes / analysis.subtasks.count)
                 : nil
+            // `items` doesn't refresh mid-loop, so nextActiveSortOrder() would
+            // return the same value for every subtask — walk it forward instead.
+            var order = nextActiveSortOrder()
             for sub in analysis.subtasks {
                 let subDifficulty = max(1, analysis.difficulty - 1)
                 let newItem = TodoItem(
                     title: sub.capitalizingFirstLetterIfEnglish(),
                     difficultyScore: subDifficulty,
-                    sortOrder: nextActiveSortOrder()
+                    sortOrder: order
                 )
+                order += 1
                 newItem.estimatedMinutes = subMinutes
                 modelContext.insert(newItem)
             }
@@ -2787,66 +2791,104 @@ struct ProjectTimeChart: View {
 
     private let days = 14
 
-    /// Compute completed minutes per project per day for the last 14 days.
-    private var chartData: [(day: Int, project: String, minutes: Int)] {
-        var result: [(Int, String, Int)] = []
+    /// Everything the chart draws, in plain arrays indexed by key and day.
+    /// `dayIndex` 0 is the oldest day shown, `days - 1` is today.
+    private struct ChartModel {
+        var keys: [String] = []
+        /// minutes[keyIndex][dayIndex]
+        var minutes: [[Int]] = []
+        /// Stacked total of every key *below* this one: below[keyIndex][dayIndex]
+        var below: [[CGFloat]] = []
+        var maxDailyTotal: CGFloat = 1
+        var totalRemaining: Int = 0
+    }
+
+    /// Builds the whole model in a single pass over `items`.
+    ///
+    /// This must stay a one-pass build: every SwiftData property read and every
+    /// `estimatedMinutes` call is expensive, so each item is touched exactly once
+    /// and the drawing code below only does array lookups.
+    private func makeModel() -> ChartModel {
         let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let known = Set(projects)
 
-        for dayOffset in 0..<days {
-            let date = cal.date(byAdding: .day, value: -dayOffset, to: Date())!
+        var buckets: [String: [Int]] = [:]
+        for proj in projects { buckets[proj] = Array(repeating: 0, count: days) }
+        var noneBucket = Array(repeating: 0, count: days)
+        var hasNone = false
+        var totalRemaining = 0
 
-            for proj in projects {
-                let mins = items.filter { item in
-                    guard item.isCompleted,
-                          let completedAt = item.completedAt,
-                          item.project == proj,
-                          cal.isDate(completedAt, inSameDayAs: date) else { return false }
-                    return true
-                }.map { CalendarService.shared.estimatedMinutes(for: $0) }.reduce(0, +)
-
-                result.append((dayOffset, proj, mins))
+        for item in items {
+            if !item.isCompleted {
+                totalRemaining += CalendarService.shared.estimatedMinutes(for: item)
+                continue
             }
+            guard let completedAt = item.completedAt else { continue }
+            let offset = cal.dateComponents([.day], from: cal.startOfDay(for: completedAt), to: today).day ?? -1
+            guard offset >= 0, offset < days else { continue }
 
-            // "No project" bucket
-            let noProj = items.filter { item in
-                guard item.isCompleted,
-                      let completedAt = item.completedAt,
-                      (item.project == nil || item.project?.isEmpty == true),
-                      cal.isDate(completedAt, inSameDayAs: date) else { return false }
-                return true
-            }.map { CalendarService.shared.estimatedMinutes(for: $0) }.reduce(0, +)
+            let dayIndex = days - 1 - offset
+            let mins = CalendarService.shared.estimatedMinutes(for: item)
+            let proj = item.project
 
-            if noProj > 0 {
-                result.append((dayOffset, "_none", noProj))
+            if let proj, !proj.isEmpty {
+                guard known.contains(proj) else { continue }
+                buckets[proj]?[dayIndex] += mins
+            } else {
+                noneBucket[dayIndex] += mins
+                if mins > 0 { hasNone = true }
             }
         }
-        return result
+
+        var model = ChartModel()
+        model.keys = projects
+        if hasNone { model.keys.append("_none") }
+        model.minutes = model.keys.map { key in
+            key == "_none" ? noneBucket : (buckets[key] ?? Array(repeating: 0, count: days))
+        }
+
+        // Prefix-sum the stack once; the last running total is also the daily max.
+        var running = Array(repeating: CGFloat(0), count: days)
+        model.below.reserveCapacity(model.keys.count)
+        for row in model.minutes {
+            model.below.append(running)
+            for d in 0..<days { running[d] += CGFloat(row[d]) }
+        }
+        model.maxDailyTotal = max(running.max() ?? 1, 1)
+        model.totalRemaining = totalRemaining
+        return model
     }
 
-    /// Max daily total across all projects (for scaling).
-    private var maxDailyTotal: Int {
-        var totals = [Int: Int]()
-        for d in chartData {
-            totals[d.day, default: 0] += d.minutes
-        }
-        return max(totals.values.max() ?? 1, 1)
-    }
+    /// Stacked outline for one project key. Pure array math — no data rescans.
+    private func stackPoints(_ model: ChartModel, keyIdx: Int, w: CGFloat, h: CGFloat) -> (top: [CGPoint], bottom: [CGPoint]) {
+        var top: [CGPoint] = []
+        var bottom: [CGPoint] = []
+        top.reserveCapacity(days)
+        bottom.reserveCapacity(days)
 
-    private var allProjectKeys: [String] {
-        var keys = projects
-        if chartData.contains(where: { $0.project == "_none" }) {
-            keys.append("_none")
+        let denom = CGFloat(max(days - 1, 1))
+        let maxVal = model.maxDailyTotal
+
+        for d in 0..<days {
+            let x = w * CGFloat(d) / denom
+            let below = model.below[keyIdx][d]
+            let current = CGFloat(model.minutes[keyIdx][d])
+            bottom.append(CGPoint(x: x, y: h * (1.0 - below / maxVal)))
+            top.append(CGPoint(x: x, y: h * (1.0 - (below + current) / maxVal)))
         }
-        return keys
+        return (top, bottom)
     }
 
     var body: some View {
+        // Built once per render and read from here on — never inside a draw loop.
+        let model = makeModel()
+
         VStack(spacing: 12) {
             // Chart area
             GeometryReader { geo in
                 let w = geo.size.width
                 let h = geo.size.height
-                let maxVal = Double(maxDailyTotal)
 
                 ZStack(alignment: .bottomLeading) {
                     // Grid lines
@@ -2861,41 +2903,17 @@ struct ProjectTimeChart: View {
                     }
 
                     // Stacked area for each project
-                    ForEach(Array(allProjectKeys.enumerated()), id: \.element) { projIdx, proj in
+                    ForEach(Array(model.keys.enumerated()), id: \.element) { keyIdx, proj in
+                        let pts = stackPoints(model, keyIdx: keyIdx, w: w, h: h)
+
                         Path { path in
-                            // Build cumulative stack
-                            var bottomPoints = [CGPoint]()
-                            var topPoints = [CGPoint]()
-
-                            for dayOffset in stride(from: days - 1, through: 0, by: -1) {
-                                let xIdx: Double = Double(days - 1 - dayOffset)
-                                let x: Double = w * xIdx / Double(max(days - 1, 1))
-
-                                // Sum of projects below this one
-                                var below: Double = 0
-                                for belowIdx in 0..<projIdx {
-                                    let belowProj = allProjectKeys[belowIdx]
-                                    let mins = chartData.first(where: { $0.day == dayOffset && $0.project == belowProj })?.minutes ?? 0
-                                    below += Double(mins)
-                                }
-
-                                let current = Double(chartData.first(where: { $0.day == dayOffset && $0.project == proj })?.minutes ?? 0)
-
-                                let bottomY: Double = h * (1.0 - below / maxVal)
-                                let topY: Double = h * (1.0 - (below + current) / maxVal)
-
-                                bottomPoints.append(CGPoint(x: x, y: bottomY))
-                                topPoints.append(CGPoint(x: x, y: topY))
-                            }
-
-                            guard !topPoints.isEmpty else { return }
-
+                            guard let first = pts.top.first else { return }
                             // Draw area: top line forward, bottom line backward
-                            path.move(to: topPoints[0])
-                            for pt in topPoints.dropFirst() {
+                            path.move(to: first)
+                            for pt in pts.top.dropFirst() {
                                 path.addLine(to: pt)
                             }
-                            for pt in bottomPoints.reversed() {
+                            for pt in pts.bottom.reversed() {
                                 path.addLine(to: pt)
                             }
                             path.closeSubpath()
@@ -2906,23 +2924,9 @@ struct ProjectTimeChart: View {
 
                         // Line on top
                         Path { path in
-                            var topPoints = [CGPoint]()
-                            for dayOffset in stride(from: days - 1, through: 0, by: -1) {
-                                let xIdx: Double = Double(days - 1 - dayOffset)
-                                let x: Double = w * xIdx / Double(max(days - 1, 1))
-                                var below: Double = 0
-                                for belowIdx in 0..<projIdx {
-                                    let belowProj = allProjectKeys[belowIdx]
-                                    let mins = chartData.first(where: { $0.day == dayOffset && $0.project == belowProj })?.minutes ?? 0
-                                    below += Double(mins)
-                                }
-                                let current = Double(chartData.first(where: { $0.day == dayOffset && $0.project == proj })?.minutes ?? 0)
-                                let y: Double = h * (1.0 - (below + current) / maxVal)
-                                topPoints.append(CGPoint(x: x, y: y))
-                            }
-                            guard !topPoints.isEmpty else { return }
-                            path.move(to: topPoints[0])
-                            for pt in topPoints.dropFirst() {
+                            guard let first = pts.top.first else { return }
+                            path.move(to: first)
+                            for pt in pts.top.dropFirst() {
                                 path.addLine(to: pt)
                             }
                         }
@@ -2948,7 +2952,7 @@ struct ProjectTimeChart: View {
             .frame(height: 90)
 
             // Legend
-            let legendItems = allProjectKeys
+            let legendItems = model.keys
             if !legendItems.isEmpty {
                 HStack(spacing: 12) {
                     ForEach(legendItems, id: \.self) { proj in
@@ -2967,12 +2971,11 @@ struct ProjectTimeChart: View {
 
             // Summary
             if !projects.isEmpty {
-                let totalActive = items.filter { !$0.isCompleted }.map { CalendarService.shared.estimatedMinutes(for: $0) }.reduce(0, +)
                 HStack(spacing: 4) {
                     Text("Total remaining:")
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
-                    Text(formatMins(totalActive))
+                    Text(formatMins(model.totalRemaining))
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.secondary)
                 }
@@ -3002,48 +3005,64 @@ struct HeatmapView: View {
         cal.date(byAdding: .day, value: -(totalDays - 1 - index), to: cal.startOfDay(for: Date()))!
     }
 
-    private func completedCount(for date: Date) -> Int {
-        items.filter {
-            guard let completedAt = $0.completedAt else { return false }
-            return cal.isDate(completedAt, inSameDayAs: date)
-        }.count
+    private struct HeatmapModel {
+        /// counts[index] — index 0 = oldest day shown, totalDays - 1 = today
+        var counts: [Int] = []
+        var maxCount: Int = 1
+        var totalCompleted: Int = 0
+        var currentStreak: Int = 0
+        var avgPerDay: Double = 0
     }
 
-    private var counts: [Int] {
-        (0..<totalDays).map { completedCount(for: dateFor(index: $0)) }
-    }
+    /// One pass over `items`; the body only reads the result.
+    ///
+    /// Bar rendering re-runs on every hover, so nothing here may be recomputed
+    /// per bar — each item's SwiftData properties are read exactly once.
+    private func makeModel() -> HeatmapModel {
+        let today = cal.startOfDay(for: Date())
 
-    private var maxCount: Int { max(1, counts.max() ?? 1) }
+        var counts = Array(repeating: 0, count: totalDays)
+        // Day offsets with at least one completion, for the streak walk.
+        var completedOffsets = Set<Int>()
 
-    private var currentStreak: Int {
-        var s = 0
-        let today = Date()
-        for offset in 0...365 {
-            guard let d = cal.date(byAdding: .day, value: -offset, to: today) else { break }
-            if completedCount(for: d) > 0 { s += 1 } else { break }
+        for item in items {
+            guard let completedAt = item.completedAt else { continue }
+            let offset = cal.dateComponents([.day], from: cal.startOfDay(for: completedAt), to: today).day ?? -1
+            guard offset >= 0 else { continue }
+
+            completedOffsets.insert(offset)
+            if offset < totalDays {
+                counts[totalDays - 1 - offset] += 1
+            }
         }
-        return s
-    }
 
-    private var totalCompleted: Int { counts.reduce(0, +) }
+        var streak = 0
+        while completedOffsets.contains(streak) { streak += 1 }
 
-    private var avgPerDay: Double {
-        guard totalDays > 0 else { return 0 }
-        return Double(totalCompleted) / Double(totalDays)
+        var model = HeatmapModel()
+        model.counts = counts
+        model.maxCount = max(1, counts.max() ?? 1)
+        model.totalCompleted = counts.reduce(0, +)
+        model.currentStreak = streak
+        model.avgPerDay = totalDays > 0 ? Double(model.totalCompleted) / Double(totalDays) : 0
+        return model
     }
 
     // MARK: - Body
 
     var body: some View {
+        // Built once per render and read from here on — never inside a draw loop.
+        let model = makeModel()
+
         VStack(alignment: .leading, spacing: 14) {
             // Inline stats row
             HStack(spacing: 16) {
-                if currentStreak > 0 {
+                if model.currentStreak > 0 {
                     HStack(spacing: 4) {
                         Image(systemName: "flame.fill")
                             .font(.system(size: 11))
                             .foregroundStyle(.orange)
-                        Text("\(currentStreak) day streak")
+                        Text("\(model.currentStreak) day streak")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.orange)
                     }
@@ -3053,11 +3072,11 @@ struct HeatmapView: View {
                     .clipShape(Capsule())
                 }
 
-                Text("\(totalCompleted) tasks")
+                Text("\(model.totalCompleted) tasks")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
 
-                Text(String(format: "%.1f / day", avgPerDay))
+                Text(String(format: "%.1f / day", model.avgPerDay))
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
 
@@ -3072,11 +3091,11 @@ struct HeatmapView: View {
 
                 HStack(alignment: .bottom, spacing: barSpacing) {
                     ForEach(0..<totalDays, id: \.self) { i in
-                        let count = counts[i]
+                        let count = model.counts[i]
                         let d = dateFor(index: i)
                         let isFuture = d > Date()
                         let isToday = i == totalDays - 1
-                        let ratio = isFuture ? 0 : (maxCount > 0 ? Double(count) / Double(maxCount) : 0)
+                        let ratio = isFuture ? 0 : Double(count) / Double(model.maxCount)
                         let barHeight = max(isFuture ? 0 : 3, chartHeight * ratio)
                         let isWeekStart = cal.component(.weekday, from: d) == 2 // Monday
 
@@ -3112,7 +3131,7 @@ struct HeatmapView: View {
             HStack {
                 if let i = hoveredIndex {
                     let d = dateFor(index: i)
-                    let count = counts[i]
+                    let count = model.counts[i]
                     HStack(spacing: 4) {
                         Text(d, format: .dateTime.weekday(.abbreviated).month(.abbreviated).day())
                         Text("·")

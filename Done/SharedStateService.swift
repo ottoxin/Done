@@ -137,7 +137,11 @@ final class SharedStateService: ObservableObject {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let file = try? decoder.decode(UpdatesFile.self, from: data) else {
+            // Tell the user instead of failing silently. The file is left in place
+            // for debugging, and lastUpdatesMTime stays set so this doesn't re-fire
+            // every 2 seconds — rewriting the file changes the mtime and retries.
             print("SharedStateService: could not decode updates.json")
+            lastAppliedMessage = "Couldn't apply changes — ~/.done/updates.json was malformed."
             return
         }
         pendingUpdates = file
@@ -148,20 +152,25 @@ final class SharedStateService: ObservableObject {
     func applyUpdates(_ file: UpdatesFile, tasks: [TodoItem], context: ModelContext) {
         let iso = ISO8601DateFormatter()
 
+        // `tasks` is a snapshot that never sees items inserted earlier in this
+        // loop, so track the next free slot ourselves. Otherwise a batch of adds
+        // (which the assistant is told to send) all land on the same sortOrder.
+        var nextOrder = (tasks.filter { !$0.isCompleted && $0.isToday }.compactMap { $0.sortOrder }.max() ?? -1) + 1
+
         for change in file.changes {
             switch change.type {
 
             case .add:
                 let difficulty = max(1, min(5, change.difficulty ?? 2))
-                let newOrder = (tasks.filter { !$0.isCompleted && $0.isToday }.compactMap { $0.sortOrder }.max() ?? -1) + 1
                 let item = TodoItem(
                     title: change.title,
                     difficultyScore: difficulty,
                     isComplex: change.isComplex ?? false,
-                    sortOrder: newOrder,
+                    sortOrder: nextOrder,
                     isToday: true,
                     project: change.project
                 )
+                nextOrder += 1
                 context.insert(item)
                 if let name = change.project {
                     Self.findOrCreateProject(name: name, context: context)

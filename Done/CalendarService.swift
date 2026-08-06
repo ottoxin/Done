@@ -165,24 +165,25 @@ final class CalendarService: ObservableObject {
         // Returns true if the block was placed
         @discardableResult
         func place(_ task: TodoItem, into pool: inout [FreeTimeSlot]) -> Bool {
-            guard totalUsed < cap else { return false }
             let needed = TimeInterval(estimatedMinutes(for: task) * 60)
-            let remaining = min(needed, cap - totalUsed)
-            guard remaining >= 60 else { return false } // don't schedule < 1 min
+            // Fit the task whole or not at all. Shrinking it to whatever is left
+            // under the cap produced blocks that contradicted the task's own
+            // estimate — a 60-minute task could show up as a 2-minute block.
+            guard needed >= 60, totalUsed + needed <= cap else { return false }
 
             for i in pool.indices {
                 let available = pool[i].end.timeIntervalSince(pool[i].start)
-                guard available >= remaining else { continue }
+                guard available >= needed else { continue }
 
                 let blockStart = pool[i].start
-                let blockEnd   = blockStart.addingTimeInterval(remaining)
+                let blockEnd   = blockStart.addingTimeInterval(needed)
                 blocks.append(ScheduledTaskBlock(
                     taskID: task.id,
                     taskTitle: task.title,
                     start: blockStart,
                     end: blockEnd
                 ))
-                totalUsed += remaining
+                totalUsed += needed
 
                 // Advance the slot past this block + buffer
                 let newStart = blockEnd.addingTimeInterval(bufferSeconds)
